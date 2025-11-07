@@ -276,11 +276,17 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     H_err_f = f_abs / (f_abs + B_loop_hz)
 
     # 4d. Residual phase noise PSD after tracking
-    S_phi_c_res_f = S_phi_c_tot_f * (H_err_f ** 2)
+    S_phi_c_res_f_nom = S_phi_c_tot_f * (H_err_f ** 2)  # nominal residual PN PSD
 
-    # 4e. Convert to discrete PSD and integrate for total variance
-    S_phi_c_res_k = S_phi_c_res_f  # Discrete samples
-    sigma_2_phi_c_res = np.sum(S_phi_c_res_k) * Delta_f_hz  # Integration for [rad²]
+    # --- α 缩放律（DR-04）---
+    alpha = config['isac_model']['alpha']
+    pn_alpha_mode = config['isac_model'].get('PN_alpha_mode', 'INVERSE')  # 'CONST' | 'INVERSE'
+    eps = np.finfo(float).eps
+    pn_scale = (1.0 / max(alpha, eps)) if pn_alpha_mode == 'INVERSE' else 1.0
+
+    # 4e. Discrete PSD & total variance
+    S_phi_c_res_k = pn_scale * S_phi_c_res_f_nom
+    sigma_2_phi_c_res = np.sum(S_phi_c_res_k) * Delta_f_hz  # [rad²]
 
     # 5. Calculate white noise components
 
@@ -293,11 +299,13 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     P_sig_avg_rx = Nt * P_pa_normalized * G_sig_avg
     sigma2_gamma = (P_sig_avg_rx * Gamma_eff_total) / B_hz
 
-    # 5c. DSE noise
+    # 5c. DSE noise （按 1/α^5 的方差，并以 PSD 摊到带宽）
     if alpha > 0:
         sigma2_DSE = C_DSE / (alpha ** 5)
     else:
         sigma2_DSE = 1e6
+
+    S_DSE_k = (sigma2_DSE / B_hz) * np.ones_like(f_vec)  # 白噪近似；若有更细模型可替换
 
     # ✅ ADD THIS LINE (base noise PSD for BCRLB calibration)
     N0_psd = N0 + sigma2_gamma  # Base white noise PSD
@@ -331,8 +339,11 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
         S_RSM_k = np.ones(N) * 1e-6
 
     # 7. Aggregate total noise PSD
-    white_noise_components = N0 + sigma2_gamma + sigma2_DSE
-    N_k_psd = white_noise_components + S_RSM_k + S_phi_c_res_k
+    N0_psd = N0 + sigma2_gamma  # [W/Hz]
+
+    # 7. Aggregate total noise PSD
+    white_noise_components = N0 + sigma2_gamma  # <-- 注意：不再把 sigma2_DSE 当作 PSD 直接相加
+    N_k_psd = white_noise_components + S_RSM_k + S_phi_c_res_k + S_DSE_k
     N_k_psd = np.maximum(N_k_psd, 1e-12)
 
     # ✅ MODIFY RETURN: Add 'N0_psd' to the return dictionary
@@ -346,7 +357,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
         'Gamma_lo': Gamma_lo,
         'Delta_f_hz': Delta_f_hz,
         'sigma2_DSE': sigma2_DSE,
-        'N0_psd': N0_psd  # ✅ NEW: Add this line!
+        'N0_psd': N0_psd
     }
 
 

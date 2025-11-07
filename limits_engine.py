@@ -152,19 +152,17 @@ def calc_BCRLB(
     SNR_p = 10.0 ** (SNR_p_db / 10.0)
 
     # 目标功率谱密度（W/Hz）
-    P_sig_psd_target = SNR_p * N0_psd
-
-    # —— 关键修正：把 PSD→能量，保证 sum |S[k]|^2 Δf = P_sig * T_obs ——
-    T_obs = N / B_hz
+    P_sig_psd_target = SNR_p * N0_psd  # [W/Hz]
+    T_obs = N / B_hz  # 观测时长 [s]
     mean_eta = float(np.mean(eta_bsq_k))
     denom = max(G_scalars * mean_eta, np.finfo(float).eps)
+
     # A^2 = (P_sig * T_obs) / (B * denom)   （其中 denom = G_scalars * <eta>）
     A = np.sqrt((P_sig_psd_target * T_obs) / (denom * B_hz))
     s_k = A * s_k_shape
 
-    # —— Parseval 自检（可选）——
     if config.get('debug', {}).get('assert_parseval', False):
-        E_freq = np.sum(np.abs(s_k) ** 2) * Delta_f_hz
+        E_freq = np.sum(np.abs(s_k) ** 2) * n_f_outputs['Delta_f_hz']
         E_time = P_sig_psd_target * T_obs
         rel_err = abs(E_freq - E_time) / max(E_time, np.finfo(float).eps)
         assert rel_err < 1e-3, f"Parseval energy mismatch: {rel_err:.3e}"

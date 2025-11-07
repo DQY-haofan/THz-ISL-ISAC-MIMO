@@ -60,8 +60,8 @@ isac_model:
   C_PN: 0.001
   C_DSE: 1.0e-09
   SNR_p_db: 20.0            # ✅ ADD THIS LINE
-  alpha_model: CONST_POWER  # ✅ ADD THIS LINE
-
+  alpha_model: CONST_ENERGY      # 让 SNR_p 随 α 变化
+  PN_alpha_mode: INVERSE         # DR-04：残余 PN ~ 1/α
 
 waveform:
   S_RSM_path: null
@@ -88,8 +88,8 @@ outputs:
   figure_path: ./figures/
 
 debug:
-  print_bcrlb_scaling: false
-  assert_parseval: true   # ← 开这个可做能量守恒自检
+  assert_parseval: true          # 启用 Parseval 自检（开发态）
+  print_bcrlb_scaling: true      # 打印 A、SNR_p 等（排查时很好用）
 
   # ====================================================================
   # Expected improvements after this fix:
