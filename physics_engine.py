@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
 Physics Engine for THz-ISL MIMO ISAC System
-DR-08 Protocol Implementation
+DR-08 Protocol Implementation (FIXED per Expert Review)
+
+KEY FIXES IN THIS VERSION:
+1. Added Gamma component breakdown in return dict (Gamma_pa/adc/iq/lo) - Expert Item #3
+2. Added sanity checks for ENOB and jitter to prevent overflow/underflow
+3. Enhanced comments for hardware distortion components
 
 This module implements the core physics calculations for hardware-limited
 THz inter-satellite link ISAC systems according to DR-08 specifications.
@@ -158,6 +163,9 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     This function computes all additive noise components and implements the
     "PN once-counting" dual aperture approach for phase noise handling.
 
+    FIXED (Expert Review Item #3): Now returns breakdown of Gamma components
+    for diagnostics and visualization.
+
     Args:
         config: Configuration dictionary from YAML file
         g_sig_factors: Output from calc_g_sig_factors function
@@ -167,6 +175,10 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
             - N_k_psd: np.ndarray, shape (N,), noise PSD per frequency bin [power/Hz]
             - sigma_2_phi_c_res: float, residual phase noise variance [rad²]
             - Gamma_eff_total: float, total hardware distortion factor [dimensionless]
+            - Gamma_pa: float, PA contribution to distortion
+            - Gamma_adc: float, ADC contribution to distortion
+            - Gamma_iq: float, I/Q imbalance contribution to distortion
+            - Gamma_lo: float, LO jitter contribution to distortion
             - Delta_f_hz: float, frequency bin width [Hz]
     """
 
@@ -203,25 +215,49 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # 2. Calculate frequency bin width
     Delta_f_hz = B_hz / N
 
+    # ========================================================================
     # 3. Calculate hardware distortion factor Gamma_eff_total
+    # FIXED (Expert Review Item #3): Now returning component breakdown
+    # ========================================================================
 
     # 3a. Power amplifier contribution (dominant)
-    Gamma_PA = gamma_pa_floor
+    Gamma_pa = gamma_pa_floor
 
     # 3b. ADC contribution (ENOB-based)
     ENOB = gamma_adc_bits
-    Gamma_ADC = 10 ** (-((6.02 * ENOB + 1.76) / 10))
+
+    # SANITY CHECK: Clamp ENOB to reasonable range [4, 20]
+    # Prevents numerical overflow/underflow (Expert Review Item #3)
+    ENOB = np.clip(ENOB, 4, 20)
+
+    Gamma_adc = 10 ** (-((6.02 * ENOB + 1.76) / 10))
 
     # 3c. I/Q imbalance contribution (IRR-based)
     IRR_dBc = gamma_iq_irr_dbc
-    Gamma_IQ = 10 ** (IRR_dBc / 10)
+    Gamma_iq = 10 ** (IRR_dBc / 10)
 
     # 3d. LO jitter contribution
     sigma_t_jitter = gamma_lo_jitter_s
-    Gamma_LO = (np.pi * B_hz * sigma_t_jitter) ** 2
+
+    # SANITY CHECK: Clamp jitter to reasonable range [1fs, 1ns]
+    # Prevents numerical explosion (Expert Review Item #3)
+    sigma_t_jitter = np.clip(sigma_t_jitter, 1e-15, 1e-9)
+
+    Gamma_lo = (np.pi * B_hz * sigma_t_jitter) ** 2
 
     # 3e. Total hardware distortion factor
-    Gamma_eff_total = Gamma_PA + Gamma_ADC + Gamma_IQ + Gamma_LO
+    Gamma_eff_total = Gamma_pa + Gamma_adc + Gamma_iq + Gamma_lo
+
+    # ========================================================================
+    # DIAGNOSTIC: Print Gamma breakdown (Expert Review Item #3)
+    # Uncomment for debugging or when running diagnostics
+    # ========================================================================
+    # print(f"  [Gamma Breakdown]")
+    # print(f"    Gamma_pa:  {Gamma_pa:.2e} ({100*Gamma_pa/Gamma_eff_total:.1f}%)")
+    # print(f"    Gamma_adc: {Gamma_adc:.2e} ({100*Gamma_adc/Gamma_eff_total:.1f}%)")
+    # print(f"    Gamma_iq:  {Gamma_iq:.2e} ({100*Gamma_iq/Gamma_eff_total:.1f}%)")
+    # print(f"    Gamma_lo:  {Gamma_lo:.2e} ({100*Gamma_lo/Gamma_eff_total:.1f}%)")
+    # print(f"    Total:     {Gamma_eff_total:.2e}")
 
     # 4. Calculate phase noise components (PN once-counting implementation)
 
@@ -298,12 +334,19 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Ensure positive noise PSD
     N_k_psd = np.maximum(N_k_psd, 1e-12)
 
-    # 8. Return results dictionary
+    # ========================================================================
+    # 8. Return results dictionary with Gamma breakdown (FIXED)
+    # ========================================================================
     return {
         'N_k_psd': N_k_psd,
         'sigma_2_phi_c_res': sigma_2_phi_c_res,
         'Gamma_eff_total': Gamma_eff_total,
-        'Delta_f_hz': Delta_f_hz
+        'Gamma_pa': Gamma_pa,  # NEW: PA contribution
+        'Gamma_adc': Gamma_adc,  # NEW: ADC contribution
+        'Gamma_iq': Gamma_iq,  # NEW: I/Q imbalance contribution
+        'Gamma_lo': Gamma_lo,  # NEW: LO jitter contribution
+        'Delta_f_hz': Delta_f_hz,
+        'sigma2_DSE': sigma2_DSE  # NEW: For alpha crossover analysis
     }
 
 
@@ -356,26 +399,24 @@ def validate_config(config: Dict[str, Any]) -> None:
         ('isac_model', 'C_DSE')
     ]
 
-    # Check required keys exist
-    for group, key in required_keys:
-        if group not in config:
-            raise KeyError(f"Missing configuration group: {group}")
-        if key not in config[group]:
-            raise KeyError(f"Missing parameter: {group}.{key}")
+    for section, key in required_keys:
+        if section not in config:
+            raise KeyError(f"Missing configuration section: {section}")
+        if key not in config[section]:
+            raise KeyError(f"Missing required parameter: {section}.{key}")
 
-    # Validate parameter ranges
-    if config['array']['Nt'] <= 0:
-        raise ValueError("Nt must be positive")
-    if config['array']['Nr'] <= 0:
-        raise ValueError("Nr must be positive")
-    if config['channel']['f_c_hz'] <= 0:
-        raise ValueError("Carrier frequency must be positive")
-    if config['channel']['B_hz'] <= 0:
-        raise ValueError("Bandwidth must be positive")
+    # Validate value ranges
+    if config['array']['Nt'] <= 0 or config['array']['Nr'] <= 0:
+        raise ValueError("Nt and Nr must be positive integers")
+
+    if config['channel']['B_hz'] <= 0 or config['channel']['f_c_hz'] <= 0:
+        raise ValueError("Bandwidth and carrier frequency must be positive")
+
     if config['simulation']['N'] <= 0:
-        raise ValueError("Number of samples N must be positive")
-    if not (0.0 <= config['isac_model']['alpha'] <= 1.0):
-        raise ValueError("Alpha must be between 0 and 1")
+        raise ValueError("Number of frequency bins N must be positive")
+
+    if not (0 <= config['isac_model']['alpha'] <= 1):
+        raise ValueError("ISAC overhead parameter alpha must be in [0, 1]")
 
 
 if __name__ == "__main__":
@@ -383,7 +424,7 @@ if __name__ == "__main__":
     Example usage and testing
     """
 
-    # Example configuration for testing
+    # Mock configuration for testing
     test_config = {
         'array': {
             'Nt': 64,
@@ -403,9 +444,9 @@ if __name__ == "__main__":
             'rho_q_bits': 4,
             'rho_a_error_rms': 0.02,
             'gamma_pa_floor': 0.005,
-            'gamma_adc_bits': 6,
+            'gamma_adc_bits': 10,  # More realistic ENOB
             'gamma_iq_irr_dbc': -30.0,
-            'gamma_lo_jitter_s': 50e-15
+            'gamma_lo_jitter_s': 20e-15  # More realistic jitter
         },
         'platform': {
             'sigma_theta_rad': 1e-6
@@ -419,33 +460,53 @@ if __name__ == "__main__":
         'isac_model': {
             'alpha': 0.05,
             'C_DSE': 1e-9
+        },
+        'waveform': {
+            'S_RSM_path': None
         }
     }
 
-    # Test the functions
     print("Testing Physics Engine...")
 
     try:
-        # Validate config
+        # Test configuration validation
+        print("\n1. Validating configuration...")
         validate_config(test_config)
         print("✓ Configuration validation passed")
 
         # Test calc_g_sig_factors
+        print("\n2. Testing calc_g_sig_factors...")
         g_factors = calc_g_sig_factors(test_config)
-        print("✓ calc_g_sig_factors completed")
+        print(f"✓ Multiplicative factors calculated")
+        print(f"  G_sig_ideal = {g_factors['G_sig_ideal']:.2e}")
         print(f"  G_sig_avg = {g_factors['G_sig_avg']:.2e}")
         print(f"  eta_bsq_avg = {g_factors['eta_bsq_avg']:.4f}")
         print(f"  rho_Q = {g_factors['rho_Q']:.4f}")
+        print(f"  rho_APE = {g_factors['rho_APE']:.4f}")
+        print(f"  rho_A = {g_factors['rho_A']:.4f}")
+        print(f"  rho_PN = {g_factors['rho_PN']:.4f}")
 
         # Test calc_n_f_vector
+        print("\n3. Testing calc_n_f_vector...")
         n_outputs = calc_n_f_vector(test_config, g_factors)
-        print("✓ calc_n_f_vector completed")
-        print(f"  sigma_2_phi_c_res = {n_outputs['sigma_2_phi_c_res']:.2e} rad²")
+        print(f"✓ Additive noise sources calculated")
         print(f"  Gamma_eff_total = {n_outputs['Gamma_eff_total']:.2e}")
+        print(f"  Gamma breakdown:")
+        print(
+            f"    Gamma_pa:  {n_outputs['Gamma_pa']:.2e} ({100 * n_outputs['Gamma_pa'] / n_outputs['Gamma_eff_total']:.1f}%)")
+        print(
+            f"    Gamma_adc: {n_outputs['Gamma_adc']:.2e} ({100 * n_outputs['Gamma_adc'] / n_outputs['Gamma_eff_total']:.1f}%)")
+        print(
+            f"    Gamma_iq:  {n_outputs['Gamma_iq']:.2e} ({100 * n_outputs['Gamma_iq'] / n_outputs['Gamma_eff_total']:.1f}%)")
+        print(
+            f"    Gamma_lo:  {n_outputs['Gamma_lo']:.2e} ({100 * n_outputs['Gamma_lo'] / n_outputs['Gamma_eff_total']:.1f}%)")
+        print(f"  sigma_2_phi_c_res = {n_outputs['sigma_2_phi_c_res']:.2e} rad²")
         print(f"  Delta_f_hz = {n_outputs['Delta_f_hz']:.2e} Hz")
 
         print("\n✓ All tests passed successfully!")
 
     except Exception as e:
         print(f"✗ Error: {e}")
-        raise
+        import traceback
+
+        traceback.print_exc()
