@@ -1,24 +1,50 @@
+# THz-ISL MIMO ISAC System Configuration
+# IMPROVED VERSION - Addresses Expert Review recommendations
+# 
+# Key changes from previous config:
+# 1. ENOB increased from 6 to 10 bits (reduces Γ_ADC by ~24 dB)
+# 2. LO jitter reduced from 50fs to 20fs (reduces Γ_LO significantly)
+# 3. Scan angle reduced from 15° to 5° (reduces beam squint effects)
+# 4. Alpha range adjusted for better Pareto visualization
+#
+# Expected improvements:
+# - Healthier capacity curves (less saturation at high SNR)
+# - Smaller Jensen gap (< 1 bit/s/Hz)
+# - Better RMSE performance
+# - More balanced Gamma component breakdown
+
+# THz-ISL MIMO ISAC System Configuration
+# FIXED VERSION - Expert Review Item #6: RMSE Amplitude Calibration
+#
+# Key additions:
+# - SNR_p_db: Observation SNR for sensing (pilot link)
+# - alpha_model: Energy allocation model (CONST_POWER or CONST_ENERGY)
+
 array:
   geometry: ULA
   Nt: 64
   Nr: 64
   L_ap_m: 0.03
   theta_0_deg: 5.0
+
 channel:
-  f_c_hz: 140000000000.0
-  B_hz: 2000000000.0
+  f_c_hz: 140000000000.0    # 140 GHz
+  B_hz: 2000000000.0        # 2 GHz
   c_mps: 299792458.0
+
 hardware:
   gamma_pa_floor: 0.005
   papr_db: 0.1
   ibo_db: 0.5
-  gamma_adc_bits: 10
+  gamma_adc_bits: 10        # IMPROVED from 6 to 10
   gamma_iq_irr_dbc: -30.0
-  gamma_lo_jitter_s: 2.0e-14
+  gamma_lo_jitter_s: 2.0e-14  # IMPROVED from 50fs to 20fs
   rho_q_bits: 4
   rho_a_error_rms: 0.02
+
 platform:
   sigma_theta_rad: 1.0e-06
+
 pn_model:
   S_phi_c_model_type: Wiener
   S_phi_c_K2: 200.0
@@ -26,28 +52,57 @@ pn_model:
   B_loop_hz: 1000000.0
   H_err_model_type: FirstOrderHPF
   sigma_rel_sq_rad2: 0.01
+
 isac_model:
   alpha: 0.1
   alpha_TTD: 0.01
   L_TTD_db: 2.0
   C_PN: 0.001
   C_DSE: 1.0e-09
+  SNR_p_db: 20.0            # ✅ ADD THIS LINE
+  alpha_model: CONST_POWER  # ✅ ADD THIS LINE
+
+
 waveform:
   S_RSM_path: null
   Phi_q: 0.1
+
+
 simulation:
   N: 2048
   FIM_MODE: Whittle-ExactDoppler
   SNR0_db_vec:
-  - -20
-  - -10
-  - 0
-  - 10
-  - 20
-  - 30
-  - 40
-  - 50
+    - -20
+    - -10
+    - 0
+    - 10
+    - 20
+    - 30
+    - 40
+    - 50
+  SNR0_db_fixed: 20.0       # Used as fallback for SNR_p_db if not specified
+
 outputs:
   save_path: ./results/
-  table_prefix: DR08_improved
+  table_prefix: DR08_results
   figure_path: ./figures/
+
+debug:
+  print_bcrlb_scaling: false
+  assert_parseval: true   # ← 开这个可做能量守恒自检
+
+  # ====================================================================
+  # Expected improvements after this fix:
+  # ====================================================================
+  # 1. RMSE will be in millimeter range (0.1-10 mm), not nanometers
+  # 2. RMSE will vary with alpha (not flat line):
+  #    - Small alpha → DSE dominates → worse RMSE
+  #    - Large alpha → PN dominates → RMSE plateaus
+  #    - Crossover at alpha* ≈ 0.08 (marked in internal states plot)
+  # 3. Pareto front will show clear trade-off (non-flat)
+  # 4. SNR_crit will be reasonable (15-25 dB, not -13 dB)
+  #
+  # Recommended parameter sweep for sensitivity analysis:
+  # - SNR_p_db: [10, 15, 20, 25, 30] dB
+  # - alpha_model: ['CONST_POWER', 'CONST_ENERGY']
+  # - Compare RMSE curves to see energy allocation impact

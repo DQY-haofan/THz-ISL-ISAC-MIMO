@@ -2,18 +2,23 @@
 """
 Comprehensive Results Visualization for ISAC System
 DR-08 / P2-DR-04 / P2-DR-01 Unified Visualization Script
+FIXED VERSION - Addresses Expert Review Items #3 and #4
 
 This script provides a complete visualization suite for ISAC performance analysis:
 1. Pareto Front Plot (R_net vs RMSE, color-mapped by alpha)
-2. Internal States Plot (Hardware factors, noise sources vs alpha)
+2. Internal States Plot (Hardware factors, noise sources vs alpha) + Gamma breakdown + Alpha crossover
 3. Capacity vs SNR Plot (C_J, C_G, C_sat, SNR_crit)
 4. Jensen Gap Analysis Plot
+
+New in this version:
+- Gamma component breakdown (stacked bar chart) - Expert Item #3
+- Alpha crossover point annotation (PN vs DSE intersection) - Expert Item #4
 
 Usage:
     python visualize_results.py --pareto <pareto_csv> --snr <snr_csv>
     python visualize_results.py  # Uses default paths
 
-Author: Generated according to DR-08 Protocol v1.0
+Author: Generated according to DR-08 Protocol v1.0 + Expert Review
 """
 
 import pandas as pd
@@ -35,6 +40,42 @@ plt.rcParams.update({
     'lines.linewidth': 2.5,
     'lines.markersize': 8
 })
+
+
+def find_alpha_crossover(df: pd.DataFrame) -> float:
+    """
+    Find the alpha value where PN and DSE curves cross.
+
+    Args:
+        df: DataFrame with columns 'alpha', 'sigma_2_phi_c_res_rad2', 'sigma_2_DSE_var'
+
+    Returns:
+        Alpha value at crossover, or None if not found
+    """
+    try:
+        # Get PN and DSE curves
+        alpha_vals = df['alpha'].values
+        pn_vals = df['sigma_2_phi_c_res_rad2'].values
+        dse_vals = df['sigma_2_DSE_var'].values
+
+        # Find where DSE crosses PN (DSE decreases as alpha increases)
+        # Look for sign change in (PN - DSE)
+        diff = pn_vals - dse_vals
+
+        # Find zero crossing using linear interpolation
+        for i in range(len(diff) - 1):
+            if diff[i] * diff[i + 1] < 0:  # Sign change detected
+                # Linear interpolation
+                alpha_cross = alpha_vals[i] - diff[i] * (alpha_vals[i + 1] - alpha_vals[i]) / (diff[i + 1] - diff[i])
+                return alpha_cross
+
+        # If no crossing found, return the alpha where they're closest
+        min_diff_idx = np.argmin(np.abs(diff))
+        return alpha_vals[min_diff_idx]
+
+    except Exception as e:
+        print(f"  Warning: Could not find alpha crossover: {e}")
+        return None
 
 
 def plot_pareto_front(csv_path: str, output_dir: str = None):
@@ -114,8 +155,11 @@ def plot_pareto_front(csv_path: str, output_dir: str = None):
     print(f"✓ Pareto front plot saved to {output_filename}")
     plt.close(fig)
 
-    # --- Secondary Plot: Internal States vs. Alpha (DR-08 Fig 2) ---
-    fig_states, axes = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
+    # ========================================================================
+    # FIXED: Enhanced Internal States Plot with Gamma Breakdown and Alpha Crossover
+    # Addresses Expert Review Items #3 and #4
+    # ========================================================================
+    fig_states, axes = plt.subplots(4, 1, figsize=(10, 16), sharex=True)
 
     # Plot 1: R_net and RMSE vs Alpha
     ax1 = axes[0]
@@ -140,7 +184,9 @@ def plot_pareto_front(csv_path: str, output_dir: str = None):
                   fontsize=13, fontweight='bold')
     ax1.grid(True, alpha=0.3)
 
-    # Plot 2: PN vs DSE scaling
+    # ========================================================================
+    # Plot 2: PN vs DSE scaling WITH CROSSOVER ANNOTATION (Expert Item #4)
+    # ========================================================================
     ax2 = axes[1]
     ax2.plot(df['alpha'], df['sigma_2_phi_c_res_rad2'],
              marker='^', markersize=6, linewidth=2,
@@ -157,11 +203,24 @@ def plot_pareto_front(csv_path: str, output_dir: str = None):
     ax2b.tick_params(axis='y', labelcolor='tab:orange')
     ax2b.set_yscale('log')
     ax2b.legend(loc='upper right', fontsize=10)
-    ax2.set_title(r'Noise/Mismatch Variance vs. $\alpha$',
+
+    # FIXED: Find and annotate alpha crossover point (Expert Item #4)
+    alpha_cross = find_alpha_crossover(df)
+    if alpha_cross is not None:
+        ax2.axvline(x=alpha_cross, color='red', linestyle=':', linewidth=2, alpha=0.7)
+        ax2.text(alpha_cross, ax2.get_ylim()[1] * 0.5,
+                 f'Crossover\n$\\alpha^* = {alpha_cross:.3f}$',
+                 color='red', fontsize=10, ha='center',
+                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
+        print(f"  ✓ Alpha crossover point: α* = {alpha_cross:.3f}")
+
+    ax2.set_title(r'Noise/Mismatch Variance vs. $\alpha$ (with Crossover)',
                   fontsize=13, fontweight='bold')
     ax2.grid(True, alpha=0.3)
 
-    # Plot 3: Hardware Factors
+    # ========================================================================
+    # Plot 3: Hardware Factors (Original)
+    # ========================================================================
     ax3 = axes[2]
     ax3.plot(df['alpha'], df['Gamma_eff_total'],
              marker='p', markersize=6, linewidth=2,
@@ -178,10 +237,65 @@ def plot_pareto_front(csv_path: str, output_dir: str = None):
     ax3b.tick_params(axis='y', labelcolor='tab:green')
     ax3b.legend(loc='upper right', fontsize=10)
 
-    ax3.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=13)
     ax3.set_title(r'Hardware Factors vs. $\alpha$',
                   fontsize=13, fontweight='bold')
     ax3.grid(True, alpha=0.3)
+
+    # ========================================================================
+    # NEW Plot 4: Gamma Component Breakdown (Expert Item #3)
+    # Stacked bar chart showing contribution of each Gamma component
+    # ========================================================================
+    ax4 = axes[3]
+
+    # Check if Gamma breakdown columns exist
+    if all(col in df.columns for col in ['Gamma_pa', 'Gamma_adc', 'Gamma_iq', 'Gamma_lo']):
+        # Select a subset of alpha values for clarity (e.g., every other point)
+        plot_indices = range(0, len(df), max(1, len(df) // 8))
+        alpha_subset = df['alpha'].iloc[plot_indices].values
+
+        # Extract component values
+        gamma_pa = df['Gamma_pa'].iloc[plot_indices].values
+        gamma_adc = df['Gamma_adc'].iloc[plot_indices].values
+        gamma_iq = df['Gamma_iq'].iloc[plot_indices].values
+        gamma_lo = df['Gamma_lo'].iloc[plot_indices].values
+
+        # Create stacked bar chart
+        width = 0.015 if len(alpha_subset) > 5 else 0.03
+        x_pos = np.arange(len(alpha_subset))
+
+        p1 = ax4.bar(alpha_subset, gamma_pa, width, label='PA', color='tab:red', alpha=0.8)
+        p2 = ax4.bar(alpha_subset, gamma_adc, width, bottom=gamma_pa,
+                     label='ADC', color='tab:blue', alpha=0.8)
+        p3 = ax4.bar(alpha_subset, gamma_iq, width,
+                     bottom=gamma_pa + gamma_adc,
+                     label='I/Q', color='tab:green', alpha=0.8)
+        p4 = ax4.bar(alpha_subset, gamma_lo, width,
+                     bottom=gamma_pa + gamma_adc + gamma_iq,
+                     label='LO', color='tab:orange', alpha=0.8)
+
+        ax4.set_ylabel(r'$\Gamma$ Components (linear)', fontsize=12)
+        ax4.set_yscale('log')
+        ax4.legend(loc='upper right', fontsize=10, ncol=2)
+        ax4.set_title(r'Hardware Distortion Breakdown vs. $\alpha$ (NEW)',
+                      fontsize=13, fontweight='bold')
+        ax4.grid(True, alpha=0.3, axis='y')
+
+        # Print breakdown for first point
+        if len(df) > 0:
+            total = df['Gamma_eff_total'].iloc[0]
+            print(f"\n  Gamma Breakdown (α={df['alpha'].iloc[0]:.3f}):")
+            print(f"    PA:  {df['Gamma_pa'].iloc[0]:.2e} ({100 * df['Gamma_pa'].iloc[0] / total:.1f}%)")
+            print(f"    ADC: {df['Gamma_adc'].iloc[0]:.2e} ({100 * df['Gamma_adc'].iloc[0] / total:.1f}%)")
+            print(f"    I/Q: {df['Gamma_iq'].iloc[0]:.2e} ({100 * df['Gamma_iq'].iloc[0] / total:.1f}%)")
+            print(f"    LO:  {df['Gamma_lo'].iloc[0]:.2e} ({100 * df['Gamma_lo'].iloc[0] / total:.1f}%)")
+    else:
+        ax4.text(0.5, 0.5, 'Gamma breakdown data not available\n(Run with updated physics_engine.py)',
+                 ha='center', va='center', transform=ax4.transAxes,
+                 fontsize=12, color='red')
+        ax4.set_title(r'Hardware Distortion Breakdown (Data Missing)',
+                      fontsize=13, fontweight='bold')
+
+    ax4.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=13)
 
     plt.tight_layout()
     output_states_fig = os.path.join(output_dir, 'fig_internal_states.png')
@@ -331,11 +445,11 @@ def generate_all_visualizations(pareto_csv: str = None, snr_csv: str = None,
     """
 
     print("\n" + "=" * 80)
-    print("COMPREHENSIVE ISAC VISUALIZATION SUITE")
+    print("COMPREHENSIVE ISAC VISUALIZATION SUITE (FIXED VERSION)")
     print("=" * 80)
 
     # Use default paths if not specified
-    default_output_dir = 'figures/'  # Relative path (cross-platform)
+    default_output_dir = 'figures/'
     if output_dir is None:
         output_dir = default_output_dir
 
@@ -343,11 +457,10 @@ def generate_all_visualizations(pareto_csv: str = None, snr_csv: str = None,
 
     # Try to find data files automatically
     if pareto_csv is None:
-        # Search for pareto results in common locations (Windows-compatible)
         search_paths = [
-            'results/DR08_results_pareto_results.csv',  # Most common location
-            'DR08_results_pareto_results.csv',  # Current directory
-            './results/DR08_results_pareto_results.csv',  # Explicit relative
+            'results/DR08_results_pareto_results.csv',
+            'DR08_results_pareto_results.csv',
+            './results/DR08_results_pareto_results.csv',
         ]
         for path in search_paths:
             if os.path.exists(path):
@@ -355,11 +468,10 @@ def generate_all_visualizations(pareto_csv: str = None, snr_csv: str = None,
                 break
 
     if snr_csv is None:
-        # Search for SNR sweep results (Windows-compatible)
         search_paths = [
-            'results/DR08_results_snr_sweep.csv',  # Most common location
-            'DR08_results_snr_sweep.csv',  # Current directory
-            './results/DR08_results_snr_sweep.csv',  # Explicit relative
+            'results/DR08_results_snr_sweep.csv',
+            'DR08_results_snr_sweep.csv',
+            './results/DR08_results_snr_sweep.csv',
         ]
         for path in search_paths:
             if os.path.exists(path):
@@ -411,7 +523,7 @@ def main():
     """Main entry point with command-line argument parsing"""
 
     parser = argparse.ArgumentParser(
-        description='Comprehensive ISAC Results Visualization',
+        description='Comprehensive ISAC Results Visualization (FIXED)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog='''
 Examples:

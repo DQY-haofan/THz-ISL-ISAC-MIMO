@@ -285,68 +285,68 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # 5. Calculate white noise components
 
     # 5a. Thermal noise (normalized reference)
+    # 5a. Thermal noise (normalized reference)
     N0 = 1.0  # Normalized thermal noise floor
 
     # 5b. Hardware distortion noise (power-dependent, Gamma_eff normalization)
-    # Following DR-08 Sec 3.2.3: sigma²_Gamma = (P_sig_avg_rx * Gamma_eff_total) / B
     P_pa_normalized = 1.0  # Normalized PA power
-    P_sig_avg_rx = Nt * P_pa_normalized * G_sig_avg  # Average received signal power
+    P_sig_avg_rx = Nt * P_pa_normalized * G_sig_avg
     sigma2_gamma = (P_sig_avg_rx * Gamma_eff_total) / B_hz
 
-    # 5c. DSE (Doppler squint effect) residual noise
-    # Alpha-dependent scaling from ISAC model
+    # 5c. DSE noise
     if alpha > 0:
         sigma2_DSE = C_DSE / (alpha ** 5)
     else:
-        sigma2_DSE = 1e6  # Large penalty for alpha=0
+        sigma2_DSE = 1e6
+
+    # ✅ ADD THIS LINE (base noise PSD for BCRLB calibration)
+    N0_psd = N0 + sigma2_gamma  # Base white noise PSD
+
+    # ====================================================================
+    # CRITICAL FIX (Expert Review Item #6 - RMSE Amplitude Calibration):
+    # Add N0_psd for BCRLB signal amplitude normalization
+    # ====================================================================
+    # Base noise PSD (white components only, no colored noise yet)
+    N0_psd = N0 + sigma2_gamma  # W/Hz, linear scale
+    # NOTE: We exclude sigma2_DSE from N0_psd because it scales with alpha
+    # and will be added separately in N_k_psd
 
     # 6. Load residual spectral modulation (RSM) if available
     try:
-        # Try to load RSM data from file if specified
         s_rsm_path = config.get('waveform', {}).get('S_RSM_path', None)
         if s_rsm_path:
             try:
-                # Load RSM data from CSV file
                 rsm_data = np.loadtxt(s_rsm_path, delimiter=',')
                 if len(rsm_data) != N:
-                    # Interpolate or pad to match N samples
                     S_RSM_k = np.interp(np.arange(N),
                                         np.linspace(0, N - 1, len(rsm_data)),
                                         rsm_data)
                 else:
                     S_RSM_k = rsm_data.copy()
             except:
-                # Fallback: use flat RSM approximation
                 S_RSM_k = np.ones(N) * 1e-6
         else:
-            # Default flat RSM for CE-Chirp-CPM (very low sidelobes)
             S_RSM_k = np.ones(N) * 1e-6
-
     except:
-        # Fallback RSM
         S_RSM_k = np.ones(N) * 1e-6
 
-    # 7. Aggregate total noise PSD per frequency bin
-    # Following DR-08 Sec 3.2.2: N[k] = (white components) + (colored components)
+    # 7. Aggregate total noise PSD
     white_noise_components = N0 + sigma2_gamma + sigma2_DSE
     N_k_psd = white_noise_components + S_RSM_k + S_phi_c_res_k
-
-    # Ensure positive noise PSD
     N_k_psd = np.maximum(N_k_psd, 1e-12)
 
-    # ========================================================================
-    # 8. Return results dictionary with Gamma breakdown (FIXED)
-    # ========================================================================
+    # ✅ MODIFY RETURN: Add 'N0_psd' to the return dictionary
     return {
         'N_k_psd': N_k_psd,
         'sigma_2_phi_c_res': sigma_2_phi_c_res,
         'Gamma_eff_total': Gamma_eff_total,
-        'Gamma_pa': Gamma_pa,  # NEW: PA contribution
-        'Gamma_adc': Gamma_adc,  # NEW: ADC contribution
-        'Gamma_iq': Gamma_iq,  # NEW: I/Q imbalance contribution
-        'Gamma_lo': Gamma_lo,  # NEW: LO jitter contribution
+        'Gamma_pa': Gamma_pa,
+        'Gamma_adc': Gamma_adc,
+        'Gamma_iq': Gamma_iq,
+        'Gamma_lo': Gamma_lo,
         'Delta_f_hz': Delta_f_hz,
-        'sigma2_DSE': sigma2_DSE  # NEW: For alpha crossover analysis
+        'sigma2_DSE': sigma2_DSE,
+        'N0_psd': N0_psd  # ✅ NEW: Add this line!
     }
 
 

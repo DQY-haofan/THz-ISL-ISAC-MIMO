@@ -1,635 +1,340 @@
 #!/usr/bin/env python3
 """
-Limits Engine for THz-ISL MIMO ISAC System
-DR-08 Protocol Implementation (Updated with Expert Recommendations)
+Main Driver for THz-ISL MIMO ISAC Performance Analysis
+DR-08 Protocol Implementation (COMPLETE VERSION)
 
-This module implements the performance limit calculations for hardware-limited
-THz inter-satellite link ISAC systems according to DR-08 specifications.
+This script performs alpha sweep to generate the ISAC Pareto front.
 
-Updates in this version:
-- Added 'Whittle-ExactDoppler' FIM mode for precise Doppler gradient calculation
-- Enhanced numerical stability in Cholesky decomposition (symmetrization, diagonal loading)
-- Added eps clamping in Whittle FIM integration
+Usage:
+    python main.py [config.yaml]
 
-Functions:
-    calc_C_J: Calculate communication capacity (Jensen bound)
-    calc_BCRLB: Calculate Bayesian Cramer-Rao Lower Bound (matched case)
-    calc_MCRB: Calculate Misspecified Cramer-Rao Lower Bound
+Output:
+    - CSV file with Pareto results (alpha sweep)
+    - Console summary of key metrics
 
 Author: Generated according to DR-08 Protocol v1.0
 """
 
 import numpy as np
-from typing import Dict, Any, Union, List, Tuple
-from scipy.linalg import cholesky, inv, LinAlgError, toeplitz
+import pandas as pd
+import yaml
+import sys
+import os
 import warnings
+from typing import Dict, Any
+
+# Import the validated DR-08 engines
+try:
+    from physics_engine import calc_g_sig_factors, calc_n_f_vector, validate_config
+    from limits_engine import calc_C_J, calc_BCRLB, calc_MCRB
+except ImportError as e:
+    print(f"Error importing required modules: {e}")
+    print("Please ensure physics_engine.py and limits_engine.py are in the same directory")
+    sys.exit(1)
 
 
-def calc_C_J(
-        config: Dict[str, Any],
-        g_sig_factors: Dict[str, Union[float, np.ndarray]],
-        n_f_outputs: Dict[str, Union[float, np.ndarray]],
-        SNR0_db_vec: Union[List[float], np.ndarray],
-        compute_C_G: bool = False
-) -> Dict[str, Union[float, np.ndarray]]:
+def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
     """
-    Calculate communication capacity (Jensen bound) - DR-08, Sec 5.1
+    Load configuration from YAML file
 
-    This function computes the Jensen inequality upper bound for channel capacity
-    and its asymptotic characteristics, following the "PN once-counting" principle
-    for communication (uses scalar sigma_2_phi_c_res, NOT vector N_k_psd).
+    Args:
+        config_path: Path to YAML configuration file
+
+    Returns:
+        Configuration dictionary
+    """
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+        return config
+    except FileNotFoundError:
+        print(f"Error: Configuration file not found: {config_path}")
+        sys.exit(1)
+    except yaml.YAMLError as e:
+        print(f"Error parsing YAML file: {e}")
+        sys.exit(1)
+
+
+def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
+    """
+    Perform alpha sweep to generate ISAC Pareto front
 
     Args:
         config: Configuration dictionary
-        g_sig_factors: Output from calc_g_sig_factors
-        n_f_outputs: Output from calc_n_f_vector
-        SNR0_db_vec: Array of SNR values in dB for capacity sweep
-        compute_C_G: If True, also compute exact Gaussian capacity (DR-05)
 
     Returns:
-        Dictionary containing:
-            - C_J_vec: np.ndarray, Jensen capacity for each SNR [bits/s/Hz]
-            - C_sat: float, saturation capacity [bits/s/Hz]
-            - SNR_crit_db: float, critical SNR in dB
-            - C_G_vec: np.ndarray (optional), Gaussian capacity if compute_C_G=True
-            - Jensen_gap_db: np.ndarray (optional), gap in dB if compute_C_G=True
+        DataFrame containing Pareto results
     """
 
-    # CRITICAL: PN once-counting for COMMUNICATION (Phase 2 衔接更正, Item 2)
-    # Extract SCALAR quantities only (NOT N_k_psd vector)
-    G_sig_avg = g_sig_factors['G_sig_avg']
-    sigma_2_phi_c_res = n_f_outputs['sigma_2_phi_c_res']
-    Gamma_eff_total = n_f_outputs['Gamma_eff_total']
+    print("\n" + "=" * 80)
+    print("ISAC PARETO FRONT GENERATION (ALPHA SWEEP)")
+    print("=" * 80)
 
-    # Calculate phase noise coherence loss (multiplicative, in numerator)
-    phase_coherence_loss = np.exp(-sigma_2_phi_c_res)
+    # Define alpha sweep range
+    # Expert recommendation: start from 0.05 to avoid DSE domination (1/α^5)
+    alpha_min = 0.05
+    alpha_max = 0.30
+    n_alpha = 15  # Number of alpha points
 
-    # Convert SNR from dB to linear
-    SNR0_vec = 10 ** (np.array(SNR0_db_vec) / 10.0)
+    alpha_vec = np.linspace(alpha_min, alpha_max, n_alpha)
+    print(f"\nSweeping α from {alpha_min} to {alpha_max} ({n_alpha} points)")
 
-    # Initialize output arrays
-    C_J_vec = np.zeros_like(SNR0_vec)
+    # Initialize results storage
+    results_list = []
 
-    # Calculate Jensen capacity for each SNR value
-    # Based on Phase 2, DR-01, Eq. (3.3.1)
-    for i, SNR0 in enumerate(SNR0_vec):
-        # Effective SINR (average over bandwidth)
-        # SINR_eff = (SNR0 * G_sig_avg * exp(-sigma²)) / (1 + SNR0 * G_sig_avg * Gamma_eff)
-        numerator = SNR0 * G_sig_avg * phase_coherence_loss
-        denominator = 1.0 + SNR0 * G_sig_avg * Gamma_eff_total
-        SINR_eff = numerator / denominator
+    # Get speed of light for RMSE conversion
+    c_mps = config['channel']['c_mps']
 
-        # Jensen capacity: C_J = log2(1 + SINR_eff)
-        C_J_vec[i] = np.log2(1.0 + SINR_eff)
+    # Fixed SNR for BCRLB calculation (mid-range)
+    SNR0_db_fixed = 20.0  # dB
 
-    # Calculate saturation capacity (C_sat) - Phase 2, DR-01, Eq. (4.1.1)
-    # C_sat = log2(1 + exp(-sigma²_phi) / Gamma_eff)
-    SINR_sat = phase_coherence_loss / Gamma_eff_total
-    C_sat = np.log2(1.0 + SINR_sat)
+    # Progress tracking
+    print("\nProgress:")
+    for i, alpha in enumerate(alpha_vec):
+        # Update alpha in config
+        config['isac_model']['alpha'] = alpha
 
-    # Calculate critical SNR (SNR_crit) - Phase 2, DR-01, Eq. (4.2.1)
-    # SNR_crit = 1 / (G_sig_avg * Gamma_eff_total)
-    SNR_crit_linear = 1.0 / (G_sig_avg * Gamma_eff_total)
-    SNR_crit_db = 10.0 * np.log10(SNR_crit_linear)
+        try:
+            # ================================================================
+            # PHASE 1: Physics Calculations
+            # ================================================================
+            # Step 1A: Multiplicative gains/losses
+            g_sig_factors = calc_g_sig_factors(config)
 
-    # Prepare output dictionary
-    results = {
-        'C_J_vec': C_J_vec,
-        'C_sat': C_sat,
-        'SNR_crit_db': SNR_crit_db,
-        'SINR_sat': SINR_sat,
-        'phase_coherence_loss': phase_coherence_loss
-    }
+            # Step 1B: Additive noise sources (depends on g_sig_factors)
+            n_f_outputs = calc_n_f_vector(config, g_sig_factors)
 
-    # Optional: Compute exact Gaussian capacity (DR-05 Jensen gap validation)
-    if compute_C_G:
-        # Need to compute C_G = (1/B) ∫ log2(1 + SINR(f)) df
-        # This requires frequency-dependent SINR calculation
-        B_hz = config['channel']['B_hz']
-        N = config['simulation']['N']
+            # ================================================================
+            # PHASE 2: Performance Limits
+            # ================================================================
+            # Communication capacity (at fixed SNR)
+            c_j_results = calc_C_J(
+                config,
+                g_sig_factors,
+                n_f_outputs,
+                [SNR0_db_fixed],  # Single SNR point
+                compute_C_G=True
+            )
 
-        # Get frequency-dependent beam squint
-        eta_bsq_k = g_sig_factors['eta_bsq_k']
+            # Sensing performance (BCRLB)
+            bcrlb_results = calc_BCRLB(config, g_sig_factors, n_f_outputs)
 
-        # Calculate scalar gain factors (without beam squint)
-        G_scalars = (g_sig_factors['G_sig_ideal'] *
-                     g_sig_factors['rho_Q'] *
-                     g_sig_factors['rho_APE'] *
-                     g_sig_factors['rho_A'] *
-                     g_sig_factors['rho_PN'])
+            # ================================================================
+            # PHASE 3: Derived Metrics
+            # ================================================================
+            # Net data rate (communication with ISAC overhead)
+            C_J_at_SNR = c_j_results['C_J_vec'][0]  # bits/s/Hz
+            R_net = (1 - alpha) * C_J_at_SNR  # Apply ISAC overhead
 
-        C_G_vec = np.zeros_like(SNR0_vec)
+            # Range RMSE (convert from time to distance)
+            # CRITICAL NOTE (Expert Review Item #2):
+            # If τ is ROUND-TRIP delay: RMSE_range = (c/2) * sqrt(BCRLB_tau)
+            # If τ is ONE-WAY delay: RMSE_range = c * sqrt(BCRLB_tau)
+            # Here we assume MONOSTATIC (round-trip), so use c/2
+            BCRLB_tau_safe = max(bcrlb_results['BCRLB_tau'], 1e-40)  # ✅ 防止下溢
+            RMSE_tau_s = np.sqrt(bcrlb_results['BCRLB_tau'])
+            RMSE_range_m = (c_mps / 2.0) * RMSE_tau_s
 
-        for i, SNR0 in enumerate(SNR0_vec):
-            # Frequency-dependent signal gain
-            G_sig_f = G_scalars * eta_bsq_k
+            if RMSE_range_m < 1e-5:  # < 10 micrometers
+                print(f"  ⚠ Warning: RMSE suspiciously small ({RMSE_range_m:.2e} m), "
+                      f"BCRLB_tau={bcrlb_results['BCRLB_tau']:.2e}")
 
-            # Frequency-dependent SINR
-            SINR_f = (SNR0 * G_sig_f * phase_coherence_loss) / \
-                     (1.0 + SNR0 * G_sig_avg * Gamma_eff_total)
+            # Doppler RMSE
+            RMSE_fD_hz = np.sqrt(bcrlb_results['BCRLB_fD'])
 
-            # Exact Gaussian capacity (average log)
-            C_G_vec[i] = np.mean(np.log2(1.0 + SINR_f))
+            # ================================================================
+            # PHASE 4: Package Results
+            # ================================================================
+            result_row = {
+                # ISAC parameter
+                'alpha': alpha,
 
-        results['C_G_vec'] = C_G_vec
-        results['Jensen_gap_db'] = 10 * np.log10(2 ** results['C_J_vec'] / 2 ** C_G_vec)
+                # Communication metrics
+                'C_J_bps_hz': C_J_at_SNR,
+                'R_net_bps_hz': R_net,
+                'C_sat': c_j_results['C_sat'],
+                'SNR_crit_db': c_j_results['SNR_crit_db'],
 
-    return results
+                # Sensing metrics
+                'RMSE_m': RMSE_range_m,
+                'RMSE_fD_hz': RMSE_fD_hz,
+                'BCRLB_tau_s2': bcrlb_results['BCRLB_tau'],
+                'BCRLB_fD_hz2': bcrlb_results['BCRLB_fD'],
+
+                # Hardware factors (from physics engine)
+                'G_sig_ideal': g_sig_factors['G_sig_ideal'],
+                'G_sig_avg': g_sig_factors['G_sig_avg'],
+                'eta_bsq_avg': g_sig_factors['eta_bsq_avg'],
+                'rho_Q': g_sig_factors['rho_Q'],
+                'rho_APE': g_sig_factors['rho_APE'],
+                'rho_A': g_sig_factors['rho_A'],
+                'rho_PN': g_sig_factors['rho_PN'],
+
+                # Noise factors
+                'Gamma_eff_total': n_f_outputs['Gamma_eff_total'],
+                'Gamma_pa': n_f_outputs['Gamma_pa'],
+                'Gamma_adc': n_f_outputs['Gamma_adc'],
+                'Gamma_iq': n_f_outputs['Gamma_iq'],
+                'Gamma_lo': n_f_outputs['Gamma_lo'],
+                'sigma_2_phi_c_res_rad2': n_f_outputs['sigma_2_phi_c_res'],
+                'sigma_2_DSE_var': n_f_outputs['sigma2_DSE'],
+
+                # System parameters
+                'SNR0_db': SNR0_db_fixed,
+                'B_hz': config['channel']['B_hz'],
+                'f_c_hz': config['channel']['f_c_hz']
+            }
+
+            results_list.append(result_row)
+
+            # Progress indicator
+            progress_pct = (i + 1) / n_alpha * 100
+            print(f"  [{i+1}/{n_alpha}] α={alpha:.3f}: R_net={R_net:.3f} bits/s/Hz, RMSE={RMSE_range_m*1000:.3f} mm ({progress_pct:.0f}%)")
+
+        except Exception as e:
+            print(f"  [ERROR] α={alpha:.3f} failed: {e}")
+            # Continue with next alpha value
+            continue
+
+    # Convert to DataFrame
+    df_results = pd.DataFrame(results_list)
+
+    print("\n✓ Alpha sweep completed successfully!")
+    print(f"  Generated {len(df_results)} valid data points")
+
+    return df_results
 
 
-def calc_BCRLB(
-        config: Dict[str, Any],
-        g_sig_factors: Dict[str, Union[float, np.ndarray]],
-        n_f_outputs: Dict[str, Union[float, np.ndarray]]
-) -> Dict[str, Union[float, np.ndarray]]:
+def save_results(df: pd.DataFrame, config: Dict[str, Any]) -> str:
     """
-    Calculate Bayesian Cramer-Rao Lower Bound (matched case) - DR-08, Sec 5.2
-
-    This function computes the sensing performance limit using Fisher Information
-    Matrix, implementing the "PN once-counting" principle for sensing (uses
-    vector N_k_psd, NOT scalar sigma_2_phi_c_res).
-
-    Supports three FIM computation modes:
-    - 'Whittle': Frequency-domain FIM with approximate Doppler gradient (O(N log N))
-    - 'Whittle-ExactDoppler': Frequency-domain FIM with exact Doppler gradient
-    - 'Cholesky': Time-domain pre-whitening FIM (exact, O(N^3))
+    Save results to CSV file
 
     Args:
+        df: Results DataFrame
         config: Configuration dictionary
-        g_sig_factors: Output from calc_g_sig_factors
-        n_f_outputs: Output from calc_n_f_vector
 
     Returns:
-        Dictionary containing:
-            - BCRLB_tau: float, range estimation CRLB [seconds²]
-            - BCRLB_fD: float, Doppler estimation CRLB [Hz²]
-            - FIM: np.ndarray, 2x2 Fisher Information Matrix
-            - CRLB_matrix: np.ndarray, 2x2 CRLB covariance matrix
+        Path to saved CSV file
     """
 
-    # Extract parameters
-    N = config['simulation']['N']
-    B_hz = config['channel']['B_hz']
-    f_c_hz = config['channel']['f_c_hz']
-    FIM_MODE = config['simulation'].get('FIM_MODE', 'Whittle')
+    # Get output configuration
+    output_config = config.get('outputs', {})
+    save_path = output_config.get('save_path', './results/')
+    table_prefix = output_config.get('table_prefix', 'DR08_results')
 
-    # CRITICAL: PN once-counting for SENSING (Phase 2 衔接更正, Item 2)
-    # Use VECTOR noise PSD (includes S_phi_c_res[k]), NOT scalar sigma²
-    N_k_psd = n_f_outputs['N_k_psd']
-    Delta_f_hz = n_f_outputs['Delta_f_hz']
+    # Create output directory if it doesn't exist
+    os.makedirs(save_path, exist_ok=True)
 
-    # Get frequency-dependent beam squint (CRITICAL: use eta_bsq_k NOT eta_bsq_avg)
-    eta_bsq_k = g_sig_factors['eta_bsq_k']
+    # Generate filename
+    csv_filename = os.path.join(save_path, f"{table_prefix}_pareto_results.csv")
 
-    # Calculate scalar gain factors (all rho factors, no beam squint)
-    G_scalars = (g_sig_factors['G_sig_ideal'] *
-                 g_sig_factors['rho_Q'] *
-                 g_sig_factors['rho_APE'] *
-                 g_sig_factors['rho_A'] *
-                 g_sig_factors['rho_PN'])
+    # Save to CSV
+    df.to_csv(csv_filename, index=False, float_format='%.6e')
 
-    # Signal amplitude per frequency bin (includes beam squint)
-    # s(f) = sqrt(G_scalars * eta_bsq(f))
-    s_k = np.sqrt(G_scalars * eta_bsq_k)
+    print(f"\n✓ Results saved to: {csv_filename}")
 
-    # Frequency axis
-    f_vec = np.linspace(-B_hz / 2, B_hz / 2, N)
+    return csv_filename
 
-    # Calculate signal gradients (Phase 2, DR-02, Sec 4.1, 4.2)
-    # Gradient w.r.t. time delay: ∂s/∂τ = -j*2π*f * s(f)
-    ds_dtau_k = -1j * 2 * np.pi * f_vec * s_k
 
-    # Gradient w.r.t. Doppler: ∂s/∂f_D
-    # Default: Approximate as j*2π*t_obs * s(f)
-    t_obs = N / B_hz  # Observation time
-    ds_dfD_k = 1j * 2 * np.pi * t_obs * s_k
+def print_summary(df: pd.DataFrame):
+    """
+    Print summary statistics of Pareto results
 
-    # Select FIM computation mode
-    if FIM_MODE == 'Whittle':
-        # Whittle-FIM (frequency domain) - Phase 2, DR-02, Sec 5.1
-        FIM = _compute_whittle_fim(ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz)
+    Args:
+        df: Results DataFrame
+    """
 
-    elif FIM_MODE == 'Whittle-ExactDoppler':
-        # [NEW] Expert recommendation: Calculate exact time-domain Doppler gradient
-        # ∂s(t)/∂f_D = j*2π*t * s(t)
-        s_t = np.fft.ifft(np.fft.ifftshift(s_k))
-        t_vec = np.linspace(-t_obs / 2, t_obs / 2, N)
-        ds_dfD_t = 1j * 2 * np.pi * t_vec * s_t
+    print("\n" + "=" * 80)
+    print("PARETO FRONT SUMMARY")
+    print("=" * 80)
 
-        # Transform gradient back to frequency domain
-        ds_dfD_k_exact = np.fft.fftshift(np.fft.fft(ds_dfD_t))
+    # Find best operating points
+    best_R_net_idx = df['R_net_bps_hz'].idxmax()
+    best_RMSE_idx = df['RMSE_m'].idxmin()
 
-        # Compute FIM using the exact Doppler gradient
-        FIM = _compute_whittle_fim(ds_dtau_k, ds_dfD_k_exact, N_k_psd, Delta_f_hz)
+    print("\n1. Best Communication Performance:")
+    print(f"   α = {df.loc[best_R_net_idx, 'alpha']:.3f}")
+    print(f"   R_net = {df.loc[best_R_net_idx, 'R_net_bps_hz']:.3f} bits/s/Hz")
+    print(f"   RMSE = {df.loc[best_R_net_idx, 'RMSE_m']*1000:.3f} mm")
 
-    elif FIM_MODE == 'Cholesky':
-        # Cholesky-FIM (time domain with pre-whitening) - Phase 2, DR-02, Sec 5.2
-        FIM = _compute_cholesky_fim(ds_dtau_k, ds_dfD_k, N_k_psd, N)
+    print("\n2. Best Sensing Performance:")
+    print(f"   α = {df.loc[best_RMSE_idx, 'alpha']:.3f}")
+    print(f"   R_net = {df.loc[best_RMSE_idx, 'R_net_bps_hz']:.3f} bits/s/Hz")
+    print(f"   RMSE = {df.loc[best_RMSE_idx, 'RMSE_m']*1000:.3f} mm")
 
+    print("\n3. System-Level Metrics (averaged):")
+    print(f"   C_sat = {df['C_sat'].mean():.3f} bits/s/Hz")
+    print(f"   SNR_crit = {df['SNR_crit_db'].mean():.2f} dB")
+    print(f"   Γ_eff (total) = {df['Gamma_eff_total'].mean():.2e}")
+    print(f"   η_bsq (avg) = {df['eta_bsq_avg'].mean():.4f}")
+
+    print("\n4. Hardware Breakdown (first point):")
+    if len(df) > 0:
+        total_gamma = df['Gamma_eff_total'].iloc[0]
+        print(f"   Gamma_PA:  {df['Gamma_pa'].iloc[0]:.2e} ({100*df['Gamma_pa'].iloc[0]/total_gamma:.1f}%)")
+        print(f"   Gamma_ADC: {df['Gamma_adc'].iloc[0]:.2e} ({100*df['Gamma_adc'].iloc[0]/total_gamma:.1f}%)")
+        print(f"   Gamma_I/Q: {df['Gamma_iq'].iloc[0]:.2e} ({100*df['Gamma_iq'].iloc[0]/total_gamma:.1f}%)")
+        print(f"   Gamma_LO:  {df['Gamma_lo'].iloc[0]:.2e} ({100*df['Gamma_lo'].iloc[0]/total_gamma:.1f}%)")
+
+    print("\n" + "=" * 80)
+
+
+def main():
+    """Main entry point"""
+
+    print("=" * 80)
+    print("THz-ISL MIMO ISAC PERFORMANCE ANALYSIS")
+    print("DR-08 Protocol Implementation")
+    print("=" * 80)
+
+    # Parse command-line arguments
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
     else:
-        raise ValueError(f"Unknown FIM_MODE: {FIM_MODE}. Must be 'Whittle', 'Whittle-ExactDoppler', or 'Cholesky'")
+        # Default config path
+        config_path = 'config.yaml'
 
-    # Compute CRLB = FIM^{-1}
+    # Load configuration
+    print(f"\nLoading configuration from: {config_path}")
+    config = load_config(config_path)
+
+    # Validate configuration
     try:
-        CRLB_matrix = inv(FIM)
-        BCRLB_tau = CRLB_matrix[0, 0]  # Variance of delay estimate
-        BCRLB_fD = CRLB_matrix[1, 1]  # Variance of Doppler estimate
-    except LinAlgError:
-        warnings.warn("FIM is singular, returning infinite BCRLB")
-        BCRLB_tau = np.inf
-        BCRLB_fD = np.inf
-        CRLB_matrix = np.array([[np.inf, np.inf], [np.inf, np.inf]])
+        validate_config(config)
+        print("✓ Configuration validated")
+    except Exception as e:
+        print(f"✗ Configuration validation failed: {e}")
+        sys.exit(1)
 
-    return {
-        'BCRLB_tau': BCRLB_tau,
-        'BCRLB_fD': BCRLB_fD,
-        'FIM': FIM,
-        'CRLB_matrix': CRLB_matrix
-    }
+    # Suppress runtime warnings for cleaner output
+    warnings.filterwarnings('ignore', category=RuntimeWarning)
 
-
-def _compute_whittle_fim(
-        ds_dtau_k: np.ndarray,
-        ds_dfD_k: np.ndarray,
-        N_k_psd: np.ndarray,
-        Delta_f_hz: float
-) -> np.ndarray:
-    """
-    Compute FIM using Whittle approximation (frequency domain)
-
-    The Whittle formula for FIM is:
-    FIM[i,j] = ∫ (1/N(f)) * 2*Re{(∂s/∂θi)^H * (∂s/∂θj)} df
-
-    Args:
-        ds_dtau_k: Gradient of signal w.r.t. delay [N]
-        ds_dfD_k: Gradient of signal w.r.t. Doppler [N]
-        N_k_psd: Noise power spectral density [N]
-        Delta_f_hz: Frequency bin spacing [Hz]
-
-    Returns:
-        2x2 Fisher Information Matrix
-    """
-
-    # [NEW] Add safety clamping for numerical stability (Expert recommendation)
-    eps = np.finfo(float).eps
-    N_k_psd_safe = np.maximum(N_k_psd, eps)
-
-    inv_N_k_psd = 1.0 / N_k_psd_safe
-
-    # Compute FIM elements using Whittle formula
-    # F_tau_tau
-    integrand_tt = inv_N_k_psd * 2 * np.real(np.conj(ds_dtau_k) * ds_dtau_k)
-    F_tau_tau = np.sum(integrand_tt) * Delta_f_hz
-
-    # F_fD_fD
-    integrand_ff = inv_N_k_psd * 2 * np.real(np.conj(ds_dfD_k) * ds_dfD_k)
-    F_fD_fD = np.sum(integrand_ff) * Delta_f_hz
-
-    # F_tau_fD (cross term)
-    integrand_tf = inv_N_k_psd * 2 * np.real(np.conj(ds_dtau_k) * ds_dfD_k)
-    F_tau_fD = np.sum(integrand_tf) * Delta_f_hz
-
-    # Construct FIM (symmetric)
-    FIM = np.array([[F_tau_tau, F_tau_fD],
-                    [F_tau_fD, F_fD_fD]])
-
-    return FIM
-
-
-def _compute_cholesky_fim(
-        ds_dtau_k: np.ndarray,
-        ds_dfD_k: np.ndarray,
-        N_k_psd: np.ndarray,
-        N: int
-) -> np.ndarray:
-    """
-    Compute FIM using time-domain pre-whitening (Cholesky fallback)
-
-    This method:
-    1. Converts noise PSD to time-domain covariance (IFFT)
-    2. Factorizes using Cholesky decomposition
-    3. Pre-whitens signal gradients
-    4. Computes FIM in whitened space
-
-    Args:
-        ds_dtau_k: Gradient of signal w.r.t. delay [N]
-        ds_dfD_k: Gradient of signal w.r.t. Doppler [N]
-        N_k_psd: Noise power spectral density [N]
-        N: Number of samples
-
-    Returns:
-        2x2 Fisher Information Matrix
-    """
-
-    # Convert PSD to covariance matrix
-    # ACF = IFFT(PSD)
-    # Sigma_n = IFFT(N_k_psd)
-
-    # [NEW] Ensure real output from IFFT for covariance
-    acf = np.fft.ifft(np.fft.ifftshift(N_k_psd))
-    acf = np.real(acf)  # Force real ACF
-
-    # Construct Toeplitz covariance matrix
-    Sigma_n = toeplitz(acf)
-
-    # [NEW] Expert recommendation: Force Hermitian symmetry
-    Sigma_n = 0.5 * (Sigma_n + np.conj(Sigma_n.T))
-
-    # Check condition number and apply diagonal loading if needed
-    cond_num = np.linalg.cond(Sigma_n)
-    if cond_num > 1e12:
-        warnings.warn(f"Sigma_n is ill-conditioned (cond={cond_num:.2e}), applying diagonal loading")
-        # [NEW] Adaptive diagonal loading based on condition number
-        loading_factor = np.trace(Sigma_n) / N * 1e-6
-        Sigma_n += loading_factor * np.eye(N)
-
-    # Cholesky decomposition: Sigma_n = L * L^H
+    # Run Pareto sweep
     try:
-        L = cholesky(Sigma_n, lower=True)
-    except LinAlgError:
-        warnings.warn("Cholesky decomposition failed, using eigenvalue decomposition")
-        # Fallback: Use eigenvalue decomposition for ill-conditioned matrices
-        eigvals, eigvecs = np.linalg.eigh(Sigma_n)
-        eigvals = np.maximum(eigvals, np.finfo(float).eps)  # Clamp negative eigenvalues
-        L = eigvecs @ np.diag(np.sqrt(eigvals))
+        df_results = run_pareto_sweep(config)
+    except Exception as e:
+        print(f"\n✗ Pareto sweep failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
 
-    # Pre-whiten signal gradients: z = L^{-1} * s_gradient
-    # Convert frequency-domain gradients to time-domain
-    ds_dtau_t = np.fft.ifft(np.fft.ifftshift(ds_dtau_k))
-    ds_dfD_t = np.fft.ifft(np.fft.ifftshift(ds_dfD_k))
-
-    # Solve for pre-whitened gradients
-    from scipy.linalg import solve_triangular
-    z_tau = solve_triangular(L, ds_dtau_t, lower=True)
-    z_fD = solve_triangular(L, ds_dfD_t, lower=True)
-
-    # Compute FIM in whitened space
-    # FIM[i,j] = 2*Re{z_i^H * z_j}
-    F_tau_tau = 2 * np.real(np.vdot(z_tau, z_tau))
-    F_fD_fD = 2 * np.real(np.vdot(z_fD, z_fD))
-    F_tau_fD = 2 * np.real(np.vdot(z_tau, z_fD))
-
-    FIM = np.array([[F_tau_tau, F_tau_fD],
-                    [F_tau_fD, F_fD_fD]])
-
-    return FIM
-
-
-def calc_MCRB(
-        config: Dict[str, Any],
-        g_sig_factors: Dict[str, Union[float, np.ndarray]],
-        n_f_outputs: Dict[str, Union[float, np.ndarray]]
-) -> Dict[str, Union[float, np.ndarray]]:
-    """
-    Calculate Misspecified Cramer-Rao Bound - DR-08, Sec 5.3
-
-    This function computes the performance bound under model mismatch using
-    the sandwich formula:
-    C_MCRB = J^{-1} * K * J^{-1}
-
-    Where:
-    - J = F_matched - E[∂²ln p/∂θ²] (sensitivity matrix)
-    - K = F_matched (Fisher information of matched model)
-
-    Args:
-        config: Configuration dictionary
-        g_sig_factors: Output from calc_g_sig_factors
-        n_f_outputs: Output from calc_n_f_vector
-
-    Returns:
-        Dictionary containing:
-            - MCRB_tau: float, misspecified range estimation bound [seconds²]
-            - MCRB_fD: float, misspecified Doppler estimation bound [Hz²]
-            - MCRB_matrix: np.ndarray, 2x2 MCRB covariance matrix
-            - F_matched: np.ndarray, matched FIM
-            - E_bias: np.ndarray, bias sensitivity matrix
-    """
-
-    # Step 1: Calculate matched FIM (K matrix) using BCRLB
-    # This is the Fisher information under correct model specification
-    bcrlb_results = calc_BCRLB(config, g_sig_factors, n_f_outputs)
-    F_matched = bcrlb_results['FIM']
-    K = F_matched.copy()  # K = F_matched in the sandwich formula
-
-    # Step 2: Calculate E[∂²ln p/∂θ²] (bias sensitivity matrix)
-    # This captures the effect of model mismatch on the estimator
-
-    # Extract mismatch parameter from waveform configuration
-    Phi_q = config.get('waveform', {}).get('Phi_q', 0.1)  # Default 0.1 rad
-    Phi_q_rad = Phi_q if isinstance(Phi_q, (int, float)) else 0.1
-
-    # Get parameters for bias calculation
-    N = config['simulation']['N']
-    B_hz = config['channel']['B_hz']
-    Delta_f_hz = n_f_outputs['Delta_f_hz']
-    N_k_psd = n_f_outputs['N_k_psd']
-
-    # Signal gradients (same as BCRLB)
-    eta_bsq_k = g_sig_factors['eta_bsq_k']
-    G_scalars = (g_sig_factors['G_sig_ideal'] *
-                 g_sig_factors['rho_Q'] *
-                 g_sig_factors['rho_APE'] *
-                 g_sig_factors['rho_A'] *
-                 g_sig_factors['rho_PN'])
-    s_k = np.sqrt(G_scalars * eta_bsq_k)
-
-    # Time vector for quadratic phase
-    t_vec = np.linspace(-N / (2 * B_hz), N / (2 * B_hz), N)
-    t_obs = N / B_hz
-
-    # Signal difference due to mismatch (in time domain)
-    # S_diff = S_true - S_est ≈ s(t) * [exp(j*Phi_q*t²/T²) - 1]
-    # For small Phi_q, this is approximately j*Phi_q*t²/T² * s(t)
-    phase_mismatch = Phi_q_rad * (t_vec / t_obs) ** 2
-    s_diff_t = s_k.mean() * (np.exp(1j * phase_mismatch) - 1)
-
-    # Convert to frequency domain
-    s_diff_f = np.fft.fft(np.fft.fftshift(s_diff_t))
-
-    # Compute bias matrix elements (Phase 2, DR-03, Eq 2.3.1)
-    # E_bias[i,j] = ∫ (1/N(f)) * 2*Re{(∂²s/∂θi∂θj)^H * s_diff} df
-
-    # Second derivatives (approximate for CE-Chirp waveform)
-    f_vec = np.linspace(-B_hz / 2, B_hz / 2, N)
-    d2s_dtau2_k = -(2 * np.pi * f_vec) ** 2 * s_k
-    d2s_dfD2_k = (2 * np.pi * t_obs) ** 2 * s_k
-    d2s_dtau_dfD_k = -1j * (2 * np.pi) ** 2 * f_vec * t_obs * s_k
-
-    # Add numerical stability
-    eps = np.finfo(float).eps
-    N_k_psd_safe = np.maximum(N_k_psd, eps)
-
-    # Bias matrix elements
-    E_bias = np.zeros((2, 2))
-
-    integrand_tt = (1.0 / N_k_psd_safe) * 2 * np.real(np.conj(d2s_dtau2_k) * s_diff_f)
-    E_bias[0, 0] = -np.sum(integrand_tt) * Delta_f_hz
-
-    integrand_ff = (1.0 / N_k_psd_safe) * 2 * np.real(np.conj(d2s_dfD2_k) * s_diff_f)
-    E_bias[1, 1] = -np.sum(integrand_ff) * Delta_f_hz
-
-    integrand_tf = (1.0 / N_k_psd_safe) * 2 * np.real(np.conj(d2s_dtau_dfD_k) * s_diff_f)
-    E_bias[0, 1] = -np.sum(integrand_tf) * Delta_f_hz
-    E_bias[1, 0] = E_bias[0, 1]
-
-    # Step 3: Compute J matrix
-    # J = F_matched - E_bias (Phase 2, DR-03, Sec 2.3)
-    J = F_matched - E_bias
-
-    # Step 4: Compute MCRB sandwich matrix
-    # C_MCRB = J^{-1} * K * J^{-1}
+    # Save results
     try:
-        J_inv = inv(J)
-        MCRB_matrix = J_inv @ K @ J_inv
-        MCRB_tau = MCRB_matrix[0, 0]
-        MCRB_fD = MCRB_matrix[1, 1]
-    except LinAlgError:
-        warnings.warn("J matrix is singular, returning infinite MCRB")
-        MCRB_tau = np.inf
-        MCRB_fD = np.inf
-        MCRB_matrix = np.array([[np.inf, np.inf], [np.inf, np.inf]])
+        csv_path = save_results(df_results, config)
+    except Exception as e:
+        print(f"\n✗ Failed to save results: {e}")
+        sys.exit(1)
 
-    return {
-        'MCRB_tau': MCRB_tau,
-        'MCRB_fD': MCRB_fD,
-        'MCRB_matrix': MCRB_matrix,
-        'F_matched': F_matched,
-        'E_bias': E_bias,
-        'Phi_q_rad': Phi_q_rad
-    }
+    # Print summary
+    print_summary(df_results)
 
-
-def validate_limits_config(config: Dict[str, Any]) -> None:
-    """
-    Validate configuration for limits engine calculations
-
-    Args:
-        config: Configuration dictionary to validate
-
-    Raises:
-        KeyError: If required parameters are missing
-        ValueError: If parameter values are invalid
-    """
-
-    # Check required simulation parameters
-    required_sim_keys = ['N', 'SNR0_db_vec']
-    for key in required_sim_keys:
-        if key not in config.get('simulation', {}):
-            raise KeyError(f"Missing simulation parameter: {key}")
-
-    # Validate FIM_MODE if present
-    if 'FIM_MODE' in config.get('simulation', {}):
-        fim_mode = config['simulation']['FIM_MODE']
-        if fim_mode not in ['Whittle', 'Whittle-ExactDoppler', 'Cholesky']:
-            raise ValueError(f"Invalid FIM_MODE: {fim_mode}. Must be 'Whittle', 'Whittle-ExactDoppler', or 'Cholesky'")
+    # Next steps guidance
+    print("\n📊 Next Steps:")
+    print("  1. Run: python scan_snr_sweep.py config.yaml")
+    print("  2. Run: python visualize_results.py")
+    print("  3. Run: python make_paper_tables.py")
+    print("\n✓ Pareto front generation complete!")
 
 
 if __name__ == "__main__":
-    """
-    Example usage and testing
-    """
-
-    # Mock configuration for testing
-    test_config = {
-        'array': {
-            'Nt': 64,
-            'Nr': 64,
-            'L_ap_m': 0.1,
-            'theta_0_deg': 30.0
-        },
-        'channel': {
-            'f_c_hz': 140e9,
-            'B_hz': 10e9,
-            'c_mps': 299792458.0
-        },
-        'simulation': {
-            'N': 2048,
-            'FIM_MODE': 'Whittle',
-            'SNR0_db_vec': [-10, 0, 10, 20, 30, 40]
-        },
-        'hardware': {
-            'rho_q_bits': 4,
-            'rho_a_error_rms': 0.02,
-            'gamma_pa_floor': 0.005,
-            'gamma_adc_bits': 6,
-            'gamma_iq_irr_dbc': -30.0,
-            'gamma_lo_jitter_s': 50e-15
-        },
-        'platform': {
-            'sigma_theta_rad': 1e-6
-        },
-        'pn_model': {
-            'sigma_rel_sq_rad2': 0.01,
-            'S_phi_c_K2': 200.0,
-            'S_phi_c_K0': 1e-15,
-            'B_loop_hz': 1e6
-        },
-        'isac_model': {
-            'alpha': 0.05,
-            'C_DSE': 1e-9
-        },
-        'waveform': {
-            'Phi_q': 0.1  # Mismatch parameter for MCRB
-        }
-    }
-
-    print("Testing Limits Engine...")
-
-    try:
-        # Import physics engine
-        from physics_engine import calc_g_sig_factors, calc_n_f_vector
-
-        # Calculate physics factors
-        print("\n1. Calculating physics factors...")
-        g_factors = calc_g_sig_factors(test_config)
-        n_outputs = calc_n_f_vector(test_config, g_factors)
-        print("✓ Physics factors calculated")
-
-        # Test calc_C_J
-        print("\n2. Testing calc_C_J...")
-        SNR0_db_vec = test_config['simulation']['SNR0_db_vec']
-        c_j_results = calc_C_J(test_config, g_factors, n_outputs, SNR0_db_vec,
-                               compute_C_G=True)
-        print(f"✓ C_J calculation completed")
-        print(f"  C_sat = {c_j_results['C_sat']:.3f} bits/s/Hz")
-        print(f"  SNR_crit = {c_j_results['SNR_crit_db']:.2f} dB")
-        print(f"  Phase coherence loss = {c_j_results['phase_coherence_loss']:.4f}")
-
-        # Test calc_BCRLB
-        print("\n3. Testing calc_BCRLB (Whittle mode)...")
-        bcrlb_results = calc_BCRLB(test_config, g_factors, n_outputs)
-        print(f"✓ BCRLB calculation completed")
-        print(f"  BCRLB(τ) = {bcrlb_results['BCRLB_tau']:.2e} s²")
-        print(f"  BCRLB(f_D) = {bcrlb_results['BCRLB_fD']:.2e} Hz²")
-
-        # Test calc_BCRLB with Cholesky
-        print("\n4. Testing calc_BCRLB (Cholesky mode)...")
-        test_config['simulation']['FIM_MODE'] = 'Cholesky'
-        bcrlb_chol = calc_BCRLB(test_config, g_factors, n_outputs)
-        print(f"✓ BCRLB (Cholesky) calculation completed")
-        print(f"  BCRLB(τ) = {bcrlb_chol['BCRLB_tau']:.2e} s²")
-
-        # Test calc_MCRB
-        print("\n5. Testing calc_MCRB...")
-        test_config['simulation']['FIM_MODE'] = 'Whittle'  # Reset
-        mcrb_results = calc_MCRB(test_config, g_factors, n_outputs)
-        print(f"✓ MCRB calculation completed")
-        print(f"  MCRB(τ) = {mcrb_results['MCRB_tau']:.2e} s²")
-        print(f"  MCRB(f_D) = {mcrb_results['MCRB_fD']:.2e} Hz²")
-        print(f"  Mismatch parameter Φ_q = {mcrb_results['Phi_q_rad']:.3f} rad")
-
-        # Calculate degradation due to mismatch
-        if bcrlb_results['BCRLB_tau'] > 0:
-            degradation_db = 10 * np.log10(mcrb_results['MCRB_tau'] /
-                                           bcrlb_results['BCRLB_tau'])
-            print(f"  Performance degradation = {degradation_db:.2f} dB")
-
-        print("\n✓ All tests passed successfully!")
-
-    except ImportError:
-        print("✗ Error: physics_engine.py not found. Please ensure it's in the same directory.")
-    except Exception as e:
-        print(f"✗ Error: {e}")
-        import traceback
-
-        traceback.print_exc()
+    main()
