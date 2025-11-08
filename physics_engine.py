@@ -346,7 +346,19 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     N_k_psd = white_noise_components + S_RSM_k + S_phi_c_res_k + S_DSE_k
     N_k_psd = np.maximum(N_k_psd, 1e-12)
 
-    # ✅ MODIFY RETURN: Add 'N0_psd' to the return dictionary
+    # ========================================================================
+    # EXPERT RECOMMENDATION: Return noise component breakdown for visualization
+    # This enables plotting "Noise Composition vs α" (Document 2, Fig. X2)
+    # ========================================================================
+    noise_components = {
+        'white': float(N0),  # Thermal noise baseline
+        'gamma': float(sigma2_gamma),  # Hardware distortion (mean across freq)
+        'rsm': float(np.mean(S_RSM_k)),  # Residual spectral modulation
+        'pn': float(np.mean(S_phi_c_res_k)),  # Phase noise residual
+        'dse': float(np.mean(S_DSE_k))  # Dynamic steering error
+    }
+
+    # ✅ MODIFY RETURN: Add 'N0_psd' and 'noise_components' to the return dictionary
     return {
         'N_k_psd': N_k_psd,
         'sigma_2_phi_c_res': sigma_2_phi_c_res,
@@ -357,7 +369,8 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
         'Gamma_lo': Gamma_lo,
         'Delta_f_hz': Delta_f_hz,
         'sigma2_DSE': sigma2_DSE,
-        'N0_psd': N0_psd
+        'N0_psd': N0_psd,
+        'noise_components': noise_components  # ← NEW: For noise breakdown visualization
     }
 
 

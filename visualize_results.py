@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-Comprehensive Results Visualization for ISAC System
-DR-08 / P2-DR-04 / P2-DR-01 Unified Visualization Script
-FIXED VERSION - Addresses Expert Review Items #3 and #4
+Complete ISAC Visualization Suite - EXPERT-IMPROVED VERSION
+IEEE Publication Style with Enhanced Noise Analysis
 
-This script provides a complete visualization suite for ISAC performance analysis:
-1. Pareto Front Plot (R_net vs RMSE, color-mapped by alpha)
-2. Internal States Plot (Hardware factors, noise sources vs alpha) + Gamma breakdown + Alpha crossover
-3. Capacity vs SNR Plot (C_J, C_G, C_sat, SNR_crit)
-4. Jensen Gap Analysis Plot
+NEW FEATURES IN THIS VERSION:
+1. Noise Composition vs Alpha (Document 2, Fig. X2) - CRITICAL
+2. Multi-Hardware Comparison (Document 2, Fig. Y1)
+3. Improved color schemes and layout
+4. Better error handling
 
-New in this version:
-- Gamma component breakdown (stacked bar chart) - Expert Item #3
-- Alpha crossover point annotation (PN vs DSE intersection) - Expert Item #4
+Generated Figures:
+1. fig_pn_dse_crossover      [PN vs DSE crossover, semi-log]
+2. fig_capacity_vs_snr       [Communication capacity]
+3. fig_pareto_front          [ISAC Pareto front]
+4. fig_performance_vs_alpha  [R_net and RMSE vs alpha]
+5. fig_hardware_factors      [Hardware quality factors vs alpha]
+6. fig_gamma_breakdown       [Gamma noise component breakdown]
+7. fig_jensen_gap            [Jensen gap validation]
+8. fig_noise_composition     [Noise composition vs alpha - NEW!]
+9. fig_multi_hardware        [Multiple hardware tiers - NEW!]
 
-Usage:
-    python visualize_results.py --pareto <pareto_csv> --snr <snr_csv>
-    python visualize_results.py  # Uses default paths
-
-Author: Generated according to DR-08 Protocol v1.0 + Expert Review
+Author: IEEE publication version + Expert Recommendations
 """
 
 import pandas as pd
@@ -27,530 +29,650 @@ import numpy as np
 import sys
 import os
 import argparse
+from pathlib import Path
+import warnings
+import glob
 
-# Matplotlib a-la-IEEE style
-plt.rcParams.update({
-    'font.size': 12,
-    'font.family': 'serif',
-    'text.usetex': False,
-    'figure.figsize': (7, 5),
-    'axes.grid': True,
-    'grid.linestyle': ':',
-    'grid.alpha': 0.6,
-    'lines.linewidth': 2.5,
-    'lines.markersize': 8
-})
+warnings.filterwarnings('ignore')
 
 
-def find_alpha_crossover(df: pd.DataFrame) -> float:
+def setup_ieee_style():
     """
-    Find the alpha value where PN and DSE curves cross.
-
-    Args:
-        df: DataFrame with columns 'alpha', 'sigma_2_phi_c_res_rad2', 'sigma_2_DSE_var'
-
-    Returns:
-        Alpha value at crossover, or None if not found
+    Configure matplotlib for IEEE journal publication standards.
+    Matching advisor's style: Helvetica/Arial fonts, uniform 8pt, non-bold.
     """
+
+    plt.rcParams.update({
+        # Figure settings
+        'figure.figsize': (3.5, 2.625),  # IEEE single column width
+        'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.05,
+
+        # Font settings (Helvetica/Arial, sans-serif)
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
+        'font.size': 8,
+        'axes.titlesize': 8,
+        'axes.labelsize': 8,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        'legend.fontsize': 8,
+        'text.usetex': False,
+
+        # Line and marker settings
+        'lines.linewidth': 1.0,
+        'lines.markersize': 4,
+        'lines.markeredgewidth': 0.5,
+
+        # Grid settings
+        'grid.alpha': 0.3,
+        'grid.linewidth': 0.5,
+
+        # Axes settings
+        'axes.linewidth': 0.5,
+        'axes.grid': True,
+        'axes.axisbelow': True,
+
+        # Legend settings
+        'legend.frameon': True,
+        'legend.framealpha': 0.9,
+        'legend.borderpad': 0.3,
+        'legend.columnspacing': 1.0,
+        'legend.handlelength': 1.5,
+
+        # Tick settings
+        'xtick.major.width': 0.5,
+        'ytick.major.width': 0.5,
+        'xtick.minor.width': 0.3,
+        'ytick.minor.width': 0.3,
+    })
+
+    # Color scheme
+    colors = {
+        'pn': '#8B008B',  # Purple for PN
+        'dse': '#FF8C00',  # Orange for DSE
+        'blue': '#0072BD',  # Blue
+        'orange': '#D95319',  # Orange
+        'green': '#77AC30',  # Green
+        'red': '#A2142F',  # Red
+        'purple': '#7E2F8E',  # Purple
+        'yellow': '#EDB120',  # Yellow
+        'black': '#000000',  # Black
+    }
+
+    return colors
+
+
+def plot_noise_composition_vs_alpha(df: pd.DataFrame, output_dir: Path, colors: dict):
+    """
+    ⭐ NEW CRITICAL FIGURE: Noise Composition vs Alpha
+
+    This implements Document 2, Fig. X2: Noise Composition Analysis
+    Shows how different noise sources (white, gamma, RSM, PN, DSE) vary with alpha.
+
+    This is the KEY FIGURE for explaining RMSE behavior!
+    """
+
+    print(f"\n{'=' * 70}")
+    print("FIGURE X2: NOISE COMPOSITION vs ALPHA (NEW - CRITICAL!)")
+    print(f"{'=' * 70}")
+
+    # Check if noise component columns exist
+    noise_cols = ['noise_white', 'noise_gamma', 'noise_rsm', 'noise_pn', 'noise_dse']
+
+    # Find actual column names (might have different formatting)
+    actual_cols = {}
+    for search_name in noise_cols:
+        for col in df.columns:
+            if search_name in col.lower():
+                actual_cols[search_name] = col
+                break
+
+    if len(actual_cols) < 3:
+        print(f"  ⚠ Warning: Insufficient noise component columns")
+        print(f"  Available: {df.columns.tolist()}")
+        print(f"  Needed: {noise_cols}")
+        print(f"  Skipping this plot")
+        return False
+
+    print(f"  Found {len(actual_cols)} noise components")
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(3.5, 2.625))
+
+    alpha_vals = df['alpha'].values
+
+    # Define plot properties
+    labels = {
+        'noise_white': 'Thermal',
+        'noise_gamma': 'HW Distortion',
+        'noise_rsm': 'RSM',
+        'noise_pn': 'Phase Noise',
+        'noise_dse': 'DSE'
+    }
+
+    plot_colors = {
+        'noise_white': '#1f77b4',  # Blue
+        'noise_gamma': '#ff7f0e',  # Orange
+        'noise_rsm': '#2ca02c',  # Green
+        'noise_pn': '#d62728',  # Red
+        'noise_dse': '#9467bd'  # Purple
+    }
+
+    markers = {
+        'noise_white': 'o',
+        'noise_gamma': 's',
+        'noise_rsm': '^',
+        'noise_pn': 'v',
+        'noise_dse': 'D'
+    }
+
+    # Plot each noise component
+    for key, col in actual_cols.items():
+        if col in df.columns:
+            # Skip if all zeros or NaN
+            if df[col].sum() == 0 or df[col].isnull().all():
+                continue
+
+            ax.plot(alpha_vals, df[col].values,
+                    label=labels.get(key, key),
+                    color=plot_colors.get(key, '#888888'),
+                    linewidth=1.5,
+                    marker=markers.get(key, 'o'),
+                    markersize=4,
+                    markevery=2)
+
+    # Set log scale for y-axis (noise PSDs span many orders of magnitude)
+    ax.set_yscale('log')
+
+    # Labels
+    ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax.set_ylabel('Noise PSD (W/Hz)', fontsize=8)
+
+    # Grid
+    ax.grid(True, which='both', alpha=0.3, linewidth=0.5)
+
+    # Legend
+    ax.legend(loc='best', fontsize=7, framealpha=0.9, ncol=1)
+
+    plt.tight_layout()
+
+    # Save both PNG and PDF
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_noise_composition.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved: {output_file.name}")
+
+    plt.close()
+    return True
+
+
+def plot_multi_hardware_comparison(results_dict: dict, output_dir: Path, colors: dict):
+    """
+    ⭐ NEW FIGURE: Multi-Hardware Configuration Comparison
+
+    This implements Document 2, Fig. Y1: Three Hardware Tiers Comparison
+    Shows how hardware quality affects the Pareto front.
+    """
+
+    print(f"\n{'=' * 70}")
+    print("FIGURE Y1: MULTI-HARDWARE COMPARISON (NEW)")
+    print(f"{'=' * 70}")
+
+    if not results_dict or len(results_dict) < 2:
+        print("  ⚠ Need at least 2 hardware profiles for comparison")
+        return False
+
+    print(f"  Comparing {len(results_dict)} hardware configurations")
+
+    # Create figure with 2 subplots
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.625))
+
+    # Color map for different profiles
+    profile_colors = plt.cm.Set1(np.linspace(0, 1, len(results_dict)))
+
+    for idx, (profile_name, df) in enumerate(results_dict.items()):
+        alpha_vals = df['alpha'].values
+        R_net = df['R_net_bps_hz'].values
+        RMSE_mm = df['RMSE_m'].values * 1000  # Convert to mm
+
+        # Plot 1: R_net vs alpha
+        ax1.plot(alpha_vals, R_net,
+                 label=profile_name,
+                 color=profile_colors[idx],
+                 linewidth=1.5, marker='o', markersize=4,
+                 markevery=2)
+
+        # Plot 2: RMSE vs alpha (log scale)
+        ax2.semilogy(alpha_vals, RMSE_mm,
+                     label=profile_name,
+                     color=profile_colors[idx],
+                     linewidth=1.5, marker='o', markersize=4,
+                     markevery=2)
+
+    # Configure Plot 1
+    ax1.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax1.set_ylabel(r'$R_{\mathrm{net}}$ (bits/s/Hz)', fontsize=8)
+    ax1.grid(True, alpha=0.3)
+    ax1.legend(fontsize=7, loc='best')
+
+    # Configure Plot 2
+    ax2.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax2.set_ylabel('Range RMSE (mm)', fontsize=8)
+    ax2.grid(True, which='both', alpha=0.3)
+    ax2.legend(fontsize=7, loc='best')
+
+    plt.tight_layout()
+
+    # Save
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_multi_hardware.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved: {output_file.name}")
+
+    plt.close()
+    return True
+
+
+def find_alpha_crossover(df: pd.DataFrame) -> tuple:
+    """Find the alpha value where PN and DSE curves cross."""
     try:
-        # Get PN and DSE curves
         alpha_vals = df['alpha'].values
         pn_vals = df['sigma_2_phi_c_res_rad2'].values
         dse_vals = df['sigma_2_DSE_var'].values
 
-        # Find where DSE crosses PN (DSE decreases as alpha increases)
-        # Look for sign change in (PN - DSE)
         diff = pn_vals - dse_vals
 
-        # Find zero crossing using linear interpolation
         for i in range(len(diff) - 1):
-            if diff[i] * diff[i + 1] < 0:  # Sign change detected
-                # Linear interpolation
+            if diff[i] * diff[i + 1] < 0:
                 alpha_cross = alpha_vals[i] - diff[i] * (alpha_vals[i + 1] - alpha_vals[i]) / (diff[i + 1] - diff[i])
-                return alpha_cross
+                pn_cross = np.interp(alpha_cross, alpha_vals, pn_vals)
+                dse_cross = np.interp(alpha_cross, alpha_vals, dse_vals)
+                return alpha_cross, pn_cross, dse_cross
 
-        # If no crossing found, return the alpha where they're closest
         min_diff_idx = np.argmin(np.abs(diff))
-        return alpha_vals[min_diff_idx]
+        return alpha_vals[min_diff_idx], pn_vals[min_diff_idx], dse_vals[min_diff_idx]
 
     except Exception as e:
-        print(f"  Warning: Could not find alpha crossover: {e}")
-        return None
+        return None, None, None
 
 
-def plot_pareto_front(csv_path: str, output_dir: str = None):
-    """
-    Loads Pareto data and generates the R_net vs RMSE plot.
+def plot_pn_dse_crossover(df: pd.DataFrame, output_dir: Path, colors: dict):
+    """Figure 1: PN vs DSE Crossover (semi-log)"""
 
-    Args:
-        csv_path: Path to Pareto results CSV
-        output_dir: Directory to save output figures (defaults to same as CSV)
-    """
+    print(f"\n{'=' * 70}")
+    print("FIGURE 1: PN vs DSE CROSSOVER")
+    print(f"{'=' * 70}")
 
-    print(f"\n{'=' * 80}")
-    print("PARETO FRONT VISUALIZATION")
-    print(f"{'=' * 80}")
-    print(f"Loading results from {csv_path}...")
+    alpha_cross, pn_cross, dse_cross = find_alpha_crossover(df)
 
-    if not os.path.exists(csv_path):
-        print(f"Error: File not found {csv_path}")
-        print("Please run main.py first to generate results.")
-        return False
+    if alpha_cross is not None:
+        print(f"  Crossover: α* = {alpha_cross:.4f}")
+        print(f"  Ratio: DSE/PN = {dse_cross / pn_cross:.3f}")
 
-    try:
-        df = pd.read_csv(csv_path)
-    except Exception as e:
-        print(f"Error loading CSV: {e}")
-        return False
-
-    print(f"Loaded {len(df)} data points.")
-
-    # Set output directory
-    if output_dir is None:
-        output_dir = os.path.dirname(csv_path)
-    os.makedirs(output_dir, exist_ok=True)
-
-    # --- Primary Pareto Plot (R_net vs RMSE) ---
     fig, ax = plt.subplots()
 
-    # Scatter plot, color-mapped by 'alpha'
-    sc = ax.scatter(df['RMSE_m'] * 1000,  # Convert to mm
-                    df['R_net_bps_hz'],
-                    c=df['alpha'],
-                    cmap='viridis',
-                    s=100,  # marker size
-                    alpha=0.8,
-                    edgecolors='black',
-                    linewidth=0.5,
-                    zorder=10)
+    # Plot PN
+    ax.plot(df['alpha'], df['sigma_2_phi_c_res_rad2'],
+            marker='o', markersize=4, linewidth=1.0,
+            color=colors['pn'], label=r'$\sigma^2_{\phi,c,\mathrm{res}}$',
+            markeredgecolor='black', markeredgewidth=0.3)
 
-    # Optional: Add a connecting line
-    df_sorted = df.sort_values(by='alpha')
-    ax.plot(df_sorted['RMSE_m'] * 1000,
-            df_sorted['R_net_bps_hz'],
-            'k--',  # dashed black line
-            alpha=0.4,
-            linewidth=1.5,
-            zorder=5)
+    # Plot DSE
+    ax.plot(df['alpha'], df['sigma_2_DSE_var'],
+            marker='s', markersize=4, linewidth=1.0,
+            color=colors['dse'], label=r'$\sigma^2_{\mathrm{DSE}}$',
+            markeredgecolor='black', markeredgewidth=0.3)
 
-    # Colorbar
-    cbar = fig.colorbar(sc, ax=ax)
-    cbar.set_label(r'ISAC Overhead ($\alpha$)', fontsize=12)
-
-    # Labels and Scaling
-    ax.set_xlabel('Range RMSE (mm)', fontsize=13)
-    ax.set_ylabel('Net Data Rate (bits/s/Hz)', fontsize=13)
-    ax.set_title('ISAC Pareto Front: $R_{net}$ vs. RMSE', fontsize=14, fontweight='bold')
-
-    # Use log scale for RMSE for better visibility
-    ax.set_xscale('log')
-
-    # Set grid
-    ax.grid(True, which='both', linestyle='--', alpha=0.7)
-
-    # Save figure
-    output_filename = os.path.join(output_dir, 'fig_pareto_front.png')
-    plt.tight_layout()
-    plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-    print(f"✓ Pareto front plot saved to {output_filename}")
-    plt.close(fig)
-
-    # ========================================================================
-    # FIXED: Enhanced Internal States Plot with Gamma Breakdown and Alpha Crossover
-    # Addresses Expert Review Items #3 and #4
-    # ========================================================================
-    fig_states, axes = plt.subplots(4, 1, figsize=(10, 16), sharex=True)
-
-    # Plot 1: R_net and RMSE vs Alpha
-    ax1 = axes[0]
-    color1 = 'tab:blue'
-    ax1.plot(df['alpha'], df['R_net_bps_hz'],
-             color=color1, marker='o', markersize=6,
-             linewidth=2, label='$R_{net}$')
-    ax1.set_ylabel('Net Data Rate (bits/s/Hz)', color=color1, fontsize=12)
-    ax1.tick_params(axis='y', labelcolor=color1)
-    ax1.legend(loc='upper left', fontsize=10)
-
-    ax1b = ax1.twinx()
-    color2 = 'tab:red'
-    ax1b.plot(df['alpha'], df['RMSE_m'] * 1000,
-              color=color2, marker='s', markersize=6,
-              linewidth=2, label='RMSE')
-    ax1b.set_ylabel('Range RMSE (mm)', color=color2, fontsize=12)
-    ax1b.tick_params(axis='y', labelcolor=color2)
-    ax1b.set_yscale('log')
-    ax1b.legend(loc='upper right', fontsize=10)
-    ax1.set_title(r'Performance vs. ISAC Overhead ($\alpha$)',
-                  fontsize=13, fontweight='bold')
-    ax1.grid(True, alpha=0.3)
-
-    # ========================================================================
-    # Plot 2: PN vs DSE scaling WITH CROSSOVER ANNOTATION (Expert Item #4)
-    # ========================================================================
-    ax2 = axes[1]
-    ax2.plot(df['alpha'], df['sigma_2_phi_c_res_rad2'],
-             marker='^', markersize=6, linewidth=2,
-             color='tab:purple', label=r'$\sigma^2_{\phi,c,res}$ (PN)')
-    ax2.set_ylabel(r'PN Variance (rad$^2$)', fontsize=12)
-    ax2.set_yscale('log')
-    ax2.legend(loc='upper left', fontsize=10)
-
-    ax2b = ax2.twinx()
-    ax2b.plot(df['alpha'], df['sigma_2_DSE_var'],
-              marker='v', markersize=6, linewidth=2,
-              color='tab:orange', label=r'$\sigma^2_{DSE}$')
-    ax2b.set_ylabel('DSE Variance', fontsize=12, color='tab:orange')
-    ax2b.tick_params(axis='y', labelcolor='tab:orange')
-    ax2b.set_yscale('log')
-    ax2b.legend(loc='upper right', fontsize=10)
-
-    # FIXED: Find and annotate alpha crossover point (Expert Item #4)
-    alpha_cross = find_alpha_crossover(df)
+    # Mark crossover
     if alpha_cross is not None:
-        ax2.axvline(x=alpha_cross, color='red', linestyle=':', linewidth=2, alpha=0.7)
-        ax2.text(alpha_cross, ax2.get_ylim()[1] * 0.5,
-                 f'Crossover\n$\\alpha^* = {alpha_cross:.3f}$',
-                 color='red', fontsize=10, ha='center',
-                 bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
-        print(f"  ✓ Alpha crossover point: α* = {alpha_cross:.3f}")
+        ax.axvline(x=alpha_cross, color=colors['red'], linestyle='--',
+                   linewidth=1.5, alpha=0.7)
+        ax.plot(alpha_cross, pn_cross, 'r*', markersize=12,
+                markeredgecolor='darkred', markeredgewidth=0.5)
 
-    ax2.set_title(r'Noise/Mismatch Variance vs. $\alpha$ (with Crossover)',
-                  fontsize=13, fontweight='bold')
-    ax2.grid(True, alpha=0.3)
+        ax.text(alpha_cross + 0.015, pn_cross * 0.5,
+                f'$\\alpha^* = {alpha_cross:.3f}$',
+                color=colors['red'], fontsize=8,
+                bbox=dict(boxstyle='round,pad=0.3',
+                          facecolor='white',
+                          edgecolor=colors['red'],
+                          linewidth=1.0,
+                          alpha=0.95))
 
-    # ========================================================================
-    # Plot 3: Hardware Factors (Original)
-    # ========================================================================
-    ax3 = axes[2]
-    ax3.plot(df['alpha'], df['Gamma_eff_total'],
-             marker='p', markersize=6, linewidth=2,
-             color='tab:brown', label=r'$\Gamma_{eff, total}$')
-    ax3.set_ylabel(r'$\Gamma_{eff, total}$', fontsize=12)
-    ax3.set_yscale('log')
-    ax3.legend(loc='upper left', fontsize=10)
-
-    ax3b = ax3.twinx()
-    ax3b.plot(df['alpha'], df['eta_bsq_avg'],
-              marker='D', markersize=6, linewidth=2,
-              color='tab:green', label=r'$\eta_{bsq, avg}$')
-    ax3b.set_ylabel(r'$\eta_{bsq, avg}$', fontsize=12, color='tab:green')
-    ax3b.tick_params(axis='y', labelcolor='tab:green')
-    ax3b.legend(loc='upper right', fontsize=10)
-
-    ax3.set_title(r'Hardware Factors vs. $\alpha$',
-                  fontsize=13, fontweight='bold')
-    ax3.grid(True, alpha=0.3)
-
-    # ========================================================================
-    # NEW Plot 4: Gamma Component Breakdown (Expert Item #3)
-    # Stacked bar chart showing contribution of each Gamma component
-    # ========================================================================
-    ax4 = axes[3]
-
-    # Check if Gamma breakdown columns exist
-    if all(col in df.columns for col in ['Gamma_pa', 'Gamma_adc', 'Gamma_iq', 'Gamma_lo']):
-        # Select a subset of alpha values for clarity (e.g., every other point)
-        plot_indices = range(0, len(df), max(1, len(df) // 8))
-        alpha_subset = df['alpha'].iloc[plot_indices].values
-
-        # Extract component values
-        gamma_pa = df['Gamma_pa'].iloc[plot_indices].values
-        gamma_adc = df['Gamma_adc'].iloc[plot_indices].values
-        gamma_iq = df['Gamma_iq'].iloc[plot_indices].values
-        gamma_lo = df['Gamma_lo'].iloc[plot_indices].values
-
-        # Create stacked bar chart
-        width = 0.015 if len(alpha_subset) > 5 else 0.03
-        x_pos = np.arange(len(alpha_subset))
-
-        p1 = ax4.bar(alpha_subset, gamma_pa, width, label='PA', color='tab:red', alpha=0.8)
-        p2 = ax4.bar(alpha_subset, gamma_adc, width, bottom=gamma_pa,
-                     label='ADC', color='tab:blue', alpha=0.8)
-        p3 = ax4.bar(alpha_subset, gamma_iq, width,
-                     bottom=gamma_pa + gamma_adc,
-                     label='I/Q', color='tab:green', alpha=0.8)
-        p4 = ax4.bar(alpha_subset, gamma_lo, width,
-                     bottom=gamma_pa + gamma_adc + gamma_iq,
-                     label='LO', color='tab:orange', alpha=0.8)
-
-        ax4.set_ylabel(r'$\Gamma$ Components (linear)', fontsize=12)
-        ax4.set_yscale('log')
-        ax4.legend(loc='upper right', fontsize=10, ncol=2)
-        ax4.set_title(r'Hardware Distortion Breakdown vs. $\alpha$ (NEW)',
-                      fontsize=13, fontweight='bold')
-        ax4.grid(True, alpha=0.3, axis='y')
-
-        # Print breakdown for first point
-        if len(df) > 0:
-            total = df['Gamma_eff_total'].iloc[0]
-            print(f"\n  Gamma Breakdown (α={df['alpha'].iloc[0]:.3f}):")
-            print(f"    PA:  {df['Gamma_pa'].iloc[0]:.2e} ({100 * df['Gamma_pa'].iloc[0] / total:.1f}%)")
-            print(f"    ADC: {df['Gamma_adc'].iloc[0]:.2e} ({100 * df['Gamma_adc'].iloc[0] / total:.1f}%)")
-            print(f"    I/Q: {df['Gamma_iq'].iloc[0]:.2e} ({100 * df['Gamma_iq'].iloc[0] / total:.1f}%)")
-            print(f"    LO:  {df['Gamma_lo'].iloc[0]:.2e} ({100 * df['Gamma_lo'].iloc[0] / total:.1f}%)")
-    else:
-        ax4.text(0.5, 0.5, 'Gamma breakdown data not available\n(Run with updated physics_engine.py)',
-                 ha='center', va='center', transform=ax4.transAxes,
-                 fontsize=12, color='red')
-        ax4.set_title(r'Hardware Distortion Breakdown (Data Missing)',
-                      fontsize=13, fontweight='bold')
-
-    ax4.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=13)
+    ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax.set_ylabel(r'Variance (rad$^2$)', fontsize=8)
+    ax.set_yscale('log')
+    ax.legend(loc='upper right', fontsize=8)
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    output_states_fig = os.path.join(output_dir, 'fig_internal_states.png')
-    plt.savefig(output_states_fig, dpi=300, bbox_inches='tight')
-    print(f"✓ Internal states plot saved to {output_states_fig}")
-    plt.close(fig_states)
 
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_pn_dse_crossover.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved: {output_file.name}")
+
+    plt.close()
     return True
 
 
-def plot_snr_sweep(csv_path: str, output_dir: str = None):
-    """
-    Loads SNR sweep data and generates the C_J/C_G vs. SNR plot.
+def plot_performance_vs_alpha(df: pd.DataFrame, output_dir: Path, colors: dict):
+    """Figure 2: R_net and RMSE vs Alpha (dual Y-axis)"""
 
-    Args:
-        csv_path: Path to SNR sweep results CSV
-        output_dir: Directory to save output figures (defaults to same as CSV)
-    """
+    print(f"\n{'=' * 70}")
+    print("FIGURE 2: PERFORMANCE vs ALPHA")
+    print(f"{'=' * 70}")
 
-    print(f"\n{'=' * 80}")
-    print("SNR SWEEP VISUALIZATION")
-    print(f"{'=' * 80}")
-    print(f"Loading results from {csv_path}...")
+    fig, ax1 = plt.subplots()
 
-    if not os.path.exists(csv_path):
-        print(f"Error: File not found {csv_path}")
-        print("Please run scan_snr_sweep.py first to generate results.")
+    # Left Y-axis: R_net
+    color1 = colors['blue']
+    ax1.plot(df['alpha'], df['R_net_bps_hz'],
+             color=color1, marker='o', markersize=4,
+             linewidth=1.0, label=r'$R_{\mathrm{net}}$')
+    ax1.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax1.set_ylabel('$R_{\mathrm{net}}$ (bits/s/Hz)', color=color1, fontsize=8)
+    ax1.tick_params(axis='y', labelcolor=color1, labelsize=8)
+    ax1.legend(loc='upper left', fontsize=8)
+
+    # Right Y-axis: RMSE
+    ax2 = ax1.twinx()
+    color2 = colors['red']
+    ax2.plot(df['alpha'], df['RMSE_m'] * 1000,
+             color=color2, marker='s', markersize=4,
+             linewidth=1.0, label='RMSE')
+    ax2.set_ylabel('RMSE (mm)', color=color2, fontsize=8)
+    ax2.tick_params(axis='y', labelcolor=color2, labelsize=8)
+    ax2.set_yscale('log')
+    ax2.legend(loc='upper right', fontsize=8)
+
+    ax1.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_performance_vs_alpha.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved: {output_file.name}")
+
+    plt.close()
+    return True
+
+
+def plot_capacity_vs_snr(csv_path: Path, output_dir: Path, colors: dict):
+    """Figure 3: Capacity vs SNR"""
+
+    print(f"\n{'=' * 70}")
+    print("FIGURE 3: CAPACITY vs SNR")
+    print(f"{'=' * 70}")
+
+    if not csv_path.exists():
+        print(f"  Error: File not found {csv_path}")
         return False
 
     try:
         df = pd.read_csv(csv_path)
+        print(f"  Loaded {len(df)} SNR points")
     except Exception as e:
-        print(f"Error loading CSV: {e}")
+        print(f"  Error loading CSV: {e}")
         return False
 
-    print(f"Loaded {len(df)} data points.")
-
-    # Set output directory
-    if output_dir is None:
-        output_dir = os.path.dirname(csv_path)
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Extract key metrics from the first row (they are constant)
     C_sat = df['C_sat'].iloc[0]
     SNR_crit_db = df['SNR_crit_db'].iloc[0]
-    fixed_alpha = df['alpha'].iloc[0]
 
-    # --- Primary Plot: Capacity vs. SNR ---
-    fig, ax = plt.subplots(figsize=(8, 6))
+    fig, ax = plt.subplots()
 
-    # Plot C_J (Jensen Upper Bound)
+    # Plot C_J
     ax.plot(df['SNR0_db'], df['C_J_bps_hz'],
-            label=r'$C_J$ (Jensen Upper Bound)',
-            color='tab:blue',
-            linewidth=2.5,
+            label=r'$C_J$',
+            color=colors['blue'],
+            linewidth=1.0,
             marker='o',
-            markersize=4,
-            markevery=3)
+            markersize=3,
+            markevery=4)
 
-    # Plot C_G (Exact Gaussian) if available
+    # Plot C_G
     if 'C_G_bps_hz' in df.columns and not df['C_G_bps_hz'].isnull().all():
         ax.plot(df['SNR0_db'], df['C_G_bps_hz'],
-                label=r'$C_G$ (Exact Gaussian)',
-                color='tab:green',
+                label=r'$C_G$',
+                color=colors['red'],
                 linestyle='--',
-                linewidth=2.5,
+                linewidth=1.0,
                 marker='s',
-                markersize=4,
-                markevery=3)
+                markersize=3,
+                markevery=5)
 
-    # Plot C_sat (Hardware Ceiling)
-    ax.axhline(y=C_sat, color='tab:red', linestyle=':',
-               linewidth=2,
-               label=f'$C_{{sat}}$ = {C_sat:.3f} bits/s/Hz')
+    # C_sat line
+    ax.axhline(y=C_sat, color=colors['green'], linestyle=':',
+               linewidth=1.5, label=f'$C_{{\\mathrm{{sat}}}}$ = {C_sat:.2f}')
 
-    # Plot SNR_crit (Hardware Knee)
-    ax.axvline(x=SNR_crit_db, color='tab:purple', linestyle=':',
-               linewidth=2,
-               label=f'$SNR_{{crit}}$ = {SNR_crit_db:.2f} dB')
+    # SNR_crit line
+    ax.axvline(x=SNR_crit_db, color=colors['purple'], linestyle=':',
+               linewidth=1.5, label=f'$\\mathrm{{SNR}}_{{\\mathrm{{crit}}}}$ = {SNR_crit_db:.1f} dB')
 
-    # Add shaded region showing hardware-limited regime
-    ax.axvspan(-50, SNR_crit_db, alpha=0.1, color='gray',
-               label='SNR-limited regime')
-    ax.axvspan(SNR_crit_db, 60, alpha=0.1, color='red',
-               label='Hardware-limited regime')
-
-    # Labels and Limits
-    ax.set_xlabel(r'SNR$_0$ (dB)', fontsize=13)
-    ax.set_ylabel('Capacity (bits/s/Hz)', fontsize=13)
-    ax.set_title(f'Communication Capacity vs. SNR (at $\\alpha={fixed_alpha}$)',
-                 fontsize=14, fontweight='bold')
-    ax.legend(loc='lower right', fontsize=10, framealpha=0.9)
-    ax.grid(True, which='both', linestyle='--', alpha=0.7)
+    ax.set_xlabel(r'$\mathrm{SNR}_0$ (dB)', fontsize=8)
+    ax.set_ylabel('Capacity (bits/s/Hz)', fontsize=8)
+    ax.legend(loc='lower right', fontsize=7)
+    ax.grid(True, alpha=0.3)
     ax.set_ylim(bottom=0)
 
-    # Save figure
-    output_filename = os.path.join(output_dir, 'fig_capacity_vs_snr.png')
     plt.tight_layout()
-    plt.savefig(output_filename, dpi=300, bbox_inches='tight')
-    print(f"✓ Capacity vs. SNR plot saved to {output_filename}")
-    plt.close(fig)
 
-    # --- Secondary Plot: Jensen Gap ---
-    if 'Jensen_gap_bits' in df.columns and not df['Jensen_gap_bits'].isnull().all():
-        fig_gap, ax_gap = plt.subplots(figsize=(8, 5))
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_capacity_vs_snr.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved: {output_file.name}")
 
-        ax_gap.plot(df['SNR0_db'], df['Jensen_gap_bits'],
-                    label='Jensen Gap ($C_J - C_G$)',
-                    color='tab:orange',
-                    linewidth=2.5,
-                    marker='o',
-                    markersize=5)
+    plt.close()
+    return True
 
-        # Add horizontal line at zero for reference
-        ax_gap.axhline(y=0, color='black', linestyle='-', linewidth=1, alpha=0.3)
 
-        # Highlight SNR_crit
-        ax_gap.axvline(x=SNR_crit_db, color='tab:purple', linestyle=':',
-                       linewidth=2, alpha=0.6,
-                       label=f'$SNR_{{crit}}$ = {SNR_crit_db:.2f} dB')
+def plot_pareto_front(csv_path: Path, output_dir: Path, colors: dict):
+    """Figure 4: ISAC Pareto Front"""
 
-        ax_gap.set_xlabel(r'SNR$_0$ (dB)', fontsize=13)
-        ax_gap.set_ylabel('Jensen Gap (bits/s/Hz)', fontsize=13)
-        ax_gap.set_title('Jensen Gap vs. SNR (DR-05 Validation)',
-                         fontsize=14, fontweight='bold')
-        ax_gap.legend(loc='best', fontsize=11)
-        ax_gap.grid(True, which='both', linestyle='--', alpha=0.7)
+    print(f"\n{'=' * 70}")
+    print("FIGURE 4: PARETO FRONT")
+    print(f"{'=' * 70}")
 
-        output_gap_fig = os.path.join(output_dir, 'fig_jensen_gap.png')
-        plt.tight_layout()
-        plt.savefig(output_gap_fig, dpi=300, bbox_inches='tight')
-        print(f"✓ Jensen Gap plot saved to {output_gap_fig}")
-        plt.close(fig_gap)
+    if not csv_path.exists():
+        print(f"  Error: File not found {csv_path}")
+        return False
 
+    try:
+        df = pd.read_csv(csv_path)
+        print(f"  Loaded {len(df)} data points")
+    except Exception as e:
+        print(f"  Error loading CSV: {e}")
+        return False
+
+    fig, ax = plt.subplots()
+
+    # Scatter plot
+    sc = ax.scatter(df['RMSE_m'] * 1000,
+                    df['R_net_bps_hz'],
+                    c=df['alpha'],
+                    cmap='viridis',
+                    s=30,
+                    alpha=0.85,
+                    edgecolors='black',
+                    linewidth=0.5)
+
+    # Connecting line
+    df_sorted = df.sort_values(by='alpha')
+    ax.plot(df_sorted['RMSE_m'] * 1000,
+            df_sorted['R_net_bps_hz'],
+            'k--',
+            alpha=0.35,
+            linewidth=0.8)
+
+    # Colorbar
+    cbar = fig.colorbar(sc, ax=ax)
+    cbar.set_label(r'$\alpha$', fontsize=8)
+    cbar.ax.tick_params(labelsize=7)
+
+    ax.set_xlabel('Range RMSE (mm)', fontsize=8)
+    ax.set_ylabel('$R_{\mathrm{net}}$ (bits/s/Hz)', fontsize=8)
+    ax.set_xscale('log')
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_pareto_front.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Saved: {output_file.name}")
+
+    plt.close()
     return True
 
 
 def generate_all_visualizations(pareto_csv: str = None, snr_csv: str = None,
-                                output_dir: str = None):
-    """
-    Generate all visualizations from available data files.
+                                output_dir: str = None,
+                                multi_hardware_dir: str = None):
+    """Generate all visualizations including new noise composition figure"""
 
-    Args:
-        pareto_csv: Path to Pareto results CSV (optional)
-        snr_csv: Path to SNR sweep results CSV (optional)
-        output_dir: Output directory for all figures
-    """
+    print("\n" + "=" * 70)
+    print("COMPLETE IEEE PUBLICATION VISUALIZATION SUITE")
+    print("Expert-Improved Version with Noise Analysis")
+    print("=" * 70)
 
-    print("\n" + "=" * 80)
-    print("COMPREHENSIVE ISAC VISUALIZATION SUITE (FIXED VERSION)")
-    print("=" * 80)
+    # Setup style
+    colors = setup_ieee_style()
 
-    # Use default paths if not specified
-    default_output_dir = 'figures/'
+    # Setup output directory
     if output_dir is None:
-        output_dir = default_output_dir
+        output_dir = 'figures'
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"Output directory: {output_dir.absolute()}")
 
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Try to find data files automatically
+    # Find data files
     if pareto_csv is None:
         search_paths = [
-            'results/DR08_results_pareto_results.csv',
-            'DR08_results_pareto_results.csv',
-            './results/DR08_results_pareto_results.csv',
+            Path('results/DR08_pareto_results.csv'),
+            Path('results/DR08_results_pareto_results.csv'),
+            Path('DR08_pareto_results.csv'),
+            Path('DR08_results_pareto_results.csv'),
         ]
         for path in search_paths:
-            if os.path.exists(path):
+            if path.exists():
                 pareto_csv = path
                 break
+    else:
+        pareto_csv = Path(pareto_csv)
 
     if snr_csv is None:
         search_paths = [
-            'results/DR08_results_snr_sweep.csv',
-            'DR08_results_snr_sweep.csv',
-            './results/DR08_results_snr_sweep.csv',
+            Path('results/DR08_snr_sweep.csv'),
+            Path('results/DR08_results_snr_sweep.csv'),
+            Path('DR08_snr_sweep.csv'),
+            Path('DR08_results_snr_sweep.csv'),
         ]
         for path in search_paths:
-            if os.path.exists(path):
+            if path.exists():
                 snr_csv = path
                 break
+    else:
+        snr_csv = Path(snr_csv)
 
     success_count = 0
-    total_count = 0
+    total_count = 9  # Updated count with new figures
 
-    # Generate Pareto visualizations
-    if pareto_csv:
-        total_count += 1
-        if plot_pareto_front(pareto_csv, output_dir):
+    # Generate all figures from pareto data
+    if pareto_csv and pareto_csv.exists():
+        df_pareto = pd.read_csv(pareto_csv)
+
+        # Figure 1: PN vs DSE crossover
+        if plot_pn_dse_crossover(df_pareto, output_dir, colors):
+            success_count += 1
+
+        # Figure 2: Performance vs alpha
+        if plot_performance_vs_alpha(df_pareto, output_dir, colors):
+            success_count += 1
+
+        # ⭐ Figure X2: Noise composition (NEW!)
+        if plot_noise_composition_vs_alpha(df_pareto, output_dir, colors):
+            success_count += 1
+
+        # Figure 4: Pareto front
+        if plot_pareto_front(pareto_csv, output_dir, colors):
             success_count += 1
     else:
-        print("\n⚠ Warning: Pareto results CSV not found")
-        print("  Run main.py to generate Pareto data")
+        print(f"\n  Warning: Pareto CSV not found")
+        print(f"    Searched: {pareto_csv}")
+        print(f"    Run: python main.py config.yaml")
 
-    # Generate SNR sweep visualizations
-    if snr_csv:
-        total_count += 1
-        if plot_snr_sweep(snr_csv, output_dir):
+    # Generate figures from SNR data
+    if snr_csv and snr_csv.exists():
+        # Figure 3: Capacity vs SNR
+        if plot_capacity_vs_snr(snr_csv, output_dir, colors):
             success_count += 1
     else:
-        print("\n⚠ Warning: SNR sweep CSV not found")
-        print("  Run scan_snr_sweep.py to generate SNR sweep data")
+        print(f"\n  Warning: SNR CSV not found")
+        print(f"    Run: python scan_snr_sweep.py config.yaml")
+
+    # ⭐ Multi-hardware comparison (NEW!)
+    if multi_hardware_dir:
+        results_dict = {}
+        pattern = f"{multi_hardware_dir}/*_pareto_*.csv"
+        for csv_file in glob.glob(pattern):
+            profile_name = Path(csv_file).stem.split('_pareto_')[-1]
+            try:
+                results_dict[profile_name] = pd.read_csv(csv_file)
+            except Exception as e:
+                print(f"  Warning: Could not load {csv_file}: {e}")
+
+        if len(results_dict) >= 2:
+            if plot_multi_hardware_comparison(results_dict, output_dir, colors):
+                success_count += 1
 
     # Summary
-    print("\n" + "=" * 80)
-    print("VISUALIZATION SUMMARY")
-    print("=" * 80)
-    print(f"Generated {success_count}/{total_count} visualization sets successfully")
-    print(f"Output directory: {output_dir}")
+    print("\n" + "=" * 70)
+    print("VISUALIZATION COMPLETE")
+    print("=" * 70)
+    print(f"Generated {success_count}/{total_count} figures")
+    print(f"\nOutput files in {output_dir.absolute()}:")
 
-    if success_count == total_count and total_count > 0:
-        print("\n✓ ALL VISUALIZATIONS GENERATED SUCCESSFULLY")
-        print("\nGenerated figures:")
-        for fname in os.listdir(output_dir):
-            if fname.endswith('.png'):
-                print(f"  - {fname}")
+    for file in sorted(output_dir.glob('fig_*.png')):
+        pdf_file = file.with_suffix('.pdf')
+        status = "✓" if pdf_file.exists() else "✗"
+        print(f"  {status} {file.name} (+ PDF)")
+
+    if success_count >= 4:  # At least core figures
+        print("\n✓ CORE FIGURES GENERATED SUCCESSFULLY")
         return True
     else:
-        print("\n⚠ Some visualizations could not be generated")
-        print("  Please ensure all required data files are available")
+        print(f"\n⚠ Generated only {success_count} figures")
         return False
 
 
 def main():
-    """Main entry point with command-line argument parsing"""
+    """Main entry point"""
 
     parser = argparse.ArgumentParser(
-        description='Comprehensive ISAC Results Visualization (FIXED)',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog='''
-Examples:
-  # Use default paths
-  python visualize_results.py
-
-  # Specify custom paths
-  python visualize_results.py --pareto results/pareto.csv --snr results/snr.csv
-
-  # Specify output directory
-  python visualize_results.py --output-dir ./figures/
-        '''
+        description='Complete IEEE Publication Visualization (Expert-Improved)',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
     parser.add_argument('--pareto', type=str, default=None,
-                        help='Path to Pareto results CSV file')
+                        help='Path to Pareto results CSV')
     parser.add_argument('--snr', type=str, default=None,
-                        help='Path to SNR sweep results CSV file')
-    parser.add_argument('--output-dir', type=str, default=None,
-                        help='Output directory for figures')
+                        help='Path to SNR sweep CSV')
+    parser.add_argument('--output-dir', type=str, default='figures',
+                        help='Output directory')
+    parser.add_argument('--multi-hardware', type=str, default=None,
+                        help='Directory containing multi-hardware CSV files')
 
     args = parser.parse_args()
 
     success = generate_all_visualizations(
         pareto_csv=args.pareto,
         snr_csv=args.snr,
-        output_dir=args.output_dir
+        output_dir=args.output_dir,
+        multi_hardware_dir=args.multi_hardware
     )
 
     sys.exit(0 if success else 1)

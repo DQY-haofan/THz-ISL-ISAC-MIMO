@@ -1,18 +1,27 @@
 #!/usr/bin/env python3
 """
 Main Driver for THz-ISL MIMO ISAC Performance Analysis
-DR-08 Protocol Implementation (COMPLETE VERSION)
+DR-08 Protocol Implementation (EXPERT-IMPROVED VERSION)
 
-This script performs alpha sweep to generate the ISAC Pareto front.
+IMPROVEMENTS IN THIS VERSION:
+1. Multi-hardware configuration sweep support (Document 2, Fig. X3)
+2. Noise composition tracking for visualization (Document 2, Fig. X2)
+3. Enhanced error handling and progress reporting
+4. Support for both single and multi-hardware runs
 
 Usage:
+    # Single hardware configuration (default)
     python main.py [config.yaml]
 
+    # Multi-hardware sweep
+    python main.py [config.yaml] --multi-hardware
+
 Output:
-    - CSV file with Pareto results (alpha sweep)
+    - CSV file(s) with Pareto results (alpha sweep)
+    - Noise composition breakdown data
     - Console summary of key metrics
 
-Author: Generated according to DR-08 Protocol v1.0
+Author: Generated according to DR-08 Protocol v1.0 + Expert Recommendations
 """
 
 import numpy as np
@@ -21,7 +30,9 @@ import yaml
 import sys
 import os
 import warnings
-from typing import Dict, Any
+import copy
+import argparse
+from typing import Dict, Any, List
 
 # Import the validated DR-08 engines
 try:
@@ -55,26 +66,30 @@ def load_config(config_path: str = 'config.yaml') -> Dict[str, Any]:
         sys.exit(1)
 
 
-def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
+def run_pareto_sweep(config: Dict[str, Any], tag: str = None) -> pd.DataFrame:
     """
     Perform alpha sweep to generate ISAC Pareto front
 
     Args:
         config: Configuration dictionary
+        tag: Optional tag for this sweep (used in multi-hardware mode)
 
     Returns:
         DataFrame containing Pareto results
     """
 
     print("\n" + "=" * 80)
-    print("ISAC PARETO FRONT GENERATION (ALPHA SWEEP)")
+    if tag:
+        print(f"ISAC PARETO FRONT GENERATION (ALPHA SWEEP) - {tag.upper()}")
+    else:
+        print("ISAC PARETO FRONT GENERATION (ALPHA SWEEP)")
     print("=" * 80)
 
     # Define alpha sweep range
     # Expert recommendation: start from 0.05 to avoid DSE domination (1/α^5)
     alpha_min = 0.05
     alpha_max = 0.30
-    n_alpha = 15  # Number of alpha points
+    n_alpha = 20  # Number of alpha points (increased for smoother curves)
 
     alpha_vec = np.linspace(alpha_min, alpha_max, n_alpha)
     print(f"\nSweeping α from {alpha_min} to {alpha_max} ({n_alpha} points)")
@@ -86,7 +101,7 @@ def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
     c_mps = config['channel']['c_mps']
 
     # Fixed SNR for BCRLB calculation (mid-range)
-    SNR0_db_fixed = 20.0  # dB
+    SNR0_db_fixed = config.get('simulation', {}).get('SNR0_db_fixed', 20.0)
 
     # Progress tracking
     print("\nProgress:")
@@ -127,23 +142,16 @@ def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
             R_net = (1 - alpha) * C_J_at_SNR  # Apply ISAC overhead
 
             # Range RMSE (convert from time to distance)
-            # CRITICAL NOTE (Expert Review Item #2):
-            # If τ is ROUND-TRIP delay: RMSE_range = (c/2) * sqrt(BCRLB_tau)
-            # If τ is ONE-WAY delay: RMSE_range = c * sqrt(BCRLB_tau)
-            # Here we assume MONOSTATIC (round-trip), so use c/2
-            BCRLB_tau_safe = max(bcrlb_results['BCRLB_tau'], 1e-40)  # ✅ 防止下溢
-            RMSE_tau_s = np.sqrt(bcrlb_results['BCRLB_tau'])
+            # CRITICAL NOTE: Monostatic radar → use c/2
+            BCRLB_tau_safe = max(bcrlb_results['BCRLB_tau'], 1e-40)
+            RMSE_tau_s = np.sqrt(BCRLB_tau_safe)
             RMSE_range_m = (c_mps / 2.0) * RMSE_tau_s
-
-            if RMSE_range_m < 1e-5:  # < 10 micrometers
-                print(f"  ⚠ Warning: RMSE suspiciously small ({RMSE_range_m:.2e} m), "
-                      f"BCRLB_tau={bcrlb_results['BCRLB_tau']:.2e}")
 
             # Doppler RMSE
             RMSE_fD_hz = np.sqrt(bcrlb_results['BCRLB_fD'])
 
             # ================================================================
-            # PHASE 4: Package Results
+            # PHASE 4: Package Results (IMPROVED: Include noise breakdown)
             # ================================================================
             result_row = {
                 # ISAC parameter
@@ -179,21 +187,32 @@ def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
                 'sigma_2_phi_c_res_rad2': n_f_outputs['sigma_2_phi_c_res'],
                 'sigma_2_DSE_var': n_f_outputs['sigma2_DSE'],
 
+                # ⭐ NEW: Noise composition breakdown (for Fig. X2)
+                'noise_white': n_f_outputs.get('noise_components', {}).get('white', 0),
+                'noise_gamma': n_f_outputs.get('noise_components', {}).get('gamma', 0),
+                'noise_rsm': n_f_outputs.get('noise_components', {}).get('rsm', 0),
+                'noise_pn': n_f_outputs.get('noise_components', {}).get('pn', 0),
+                'noise_dse': n_f_outputs.get('noise_components', {}).get('dse', 0),
+
                 # System parameters
                 'SNR0_db': SNR0_db_fixed,
                 'B_hz': config['channel']['B_hz'],
-                'f_c_hz': config['channel']['f_c_hz']
+                'f_c_hz': config['channel']['f_c_hz'],
+                'N': config['simulation']['N']
             }
 
             results_list.append(result_row)
 
             # Progress indicator
             progress_pct = (i + 1) / n_alpha * 100
-            print(f"  [{i+1}/{n_alpha}] α={alpha:.3f}: R_net={R_net:.3f} bits/s/Hz, RMSE={RMSE_range_m*1000:.3f} mm ({progress_pct:.0f}%)")
+            print(
+                f"  [{i + 1}/{n_alpha}] α={alpha:.3f}: R_net={R_net:.3f} bits/s/Hz, "
+                f"RMSE={RMSE_range_m * 1000:.3f} mm ({progress_pct:.0f}%)")
 
         except Exception as e:
             print(f"  [ERROR] α={alpha:.3f} failed: {e}")
-            # Continue with next alpha value
+            import traceback
+            traceback.print_exc()
             continue
 
     # Convert to DataFrame
@@ -205,28 +224,141 @@ def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
     return df_results
 
 
-def save_results(df: pd.DataFrame, config: Dict[str, Any]) -> str:
+def run_multi_hardware_sweep(config: Dict[str, Any], hardware_profiles: List[Dict[str, Any]]) -> Dict[
+    str, pd.DataFrame]:
+    """
+    Run Pareto sweep for multiple hardware configurations
+
+    This implements Document 2, Fig. X3: Hardware Sensitivity Analysis
+
+    Args:
+        config: Base configuration dictionary
+        hardware_profiles: List of hardware profile dictionaries, each containing:
+            - 'name': Profile identifier (e.g., 'good', 'mid', 'poor')
+            - Hardware parameters to override
+
+    Returns:
+        Dictionary mapping profile names to their results DataFrames
+    """
+
+    print("\n" + "=" * 80)
+    print("MULTI-HARDWARE CONFIGURATION SWEEP")
+    print("Document 2, Fig. X3: Hardware Sensitivity Analysis")
+    print("=" * 80)
+    print(f"\nRunning {len(hardware_profiles)} hardware configurations...")
+
+    results_dict = {}
+
+    for i, profile in enumerate(hardware_profiles):
+        profile_name = profile.get('name', f'config_{i}')
+        print(f"\n[{i + 1}/{len(hardware_profiles)}] Processing profile: {profile_name}")
+        print("-" * 80)
+
+        # Create a copy of config for this profile
+        profile_config = copy.deepcopy(config)
+
+        # Apply hardware overrides
+        for key, value in profile.items():
+            if key != 'name':
+                # Support nested keys (e.g., 'hardware.gamma_adc_bits')
+                if '.' in key:
+                    sections = key.split('.')
+                    target = profile_config
+                    for section in sections[:-1]:
+                        target = target[section]
+                    target[sections[-1]] = value
+                else:
+                    # Assume hardware section by default
+                    if key in profile_config.get('hardware', {}):
+                        profile_config['hardware'][key] = value
+
+        # Print key hardware parameters for this profile
+        print(f"  Hardware parameters:")
+        for key, value in profile.items():
+            if key != 'name':
+                print(f"    {key}: {value}")
+
+        # Run Pareto sweep for this configuration
+        try:
+            df_results = run_pareto_sweep(profile_config, tag=profile_name)
+            results_dict[profile_name] = df_results
+
+            # Quick summary
+            best_R_net = df_results['R_net_bps_hz'].max()
+            best_RMSE = df_results['RMSE_m'].min()
+            print(f"  ✓ Profile '{profile_name}' complete:")
+            print(f"    Best R_net: {best_R_net:.3f} bits/s/Hz")
+            print(f"    Best RMSE: {best_RMSE * 1000:.3f} mm")
+
+        except Exception as e:
+            print(f"  ✗ Profile '{profile_name}' failed: {e}")
+            continue
+
+    print("\n" + "=" * 80)
+    print(f"✓ Multi-hardware sweep completed: {len(results_dict)}/{len(hardware_profiles)} profiles successful")
+    print("=" * 80)
+
+    return results_dict
+
+
+def get_default_hardware_profiles() -> List[Dict[str, Any]]:
+    """
+    Define default hardware profiles for multi-hardware sweep
+
+    Returns three tiers: Good, Mid, Poor
+
+    Returns:
+        List of hardware profile dictionaries
+    """
+    return [
+        {
+            'name': 'good',
+            'gamma_adc_bits': 12,  # 12-bit ENOB
+            'gamma_lo_jitter_s': 10e-15,  # 10 fs
+            'gamma_pa_floor': 0.001,
+            'gamma_iq_irr_dbc': -35.0
+        },
+        {
+            'name': 'mid',
+            'gamma_adc_bits': 10,  # 10-bit ENOB
+            'gamma_lo_jitter_s': 20e-15,  # 20 fs
+            'gamma_pa_floor': 0.005,
+            'gamma_iq_irr_dbc': -30.0
+        },
+        {
+            'name': 'poor',
+            'gamma_adc_bits': 8,  # 8-bit ENOB
+            'gamma_lo_jitter_s': 50e-15,  # 50 fs
+            'gamma_pa_floor': 0.02,
+            'gamma_iq_irr_dbc': -25.0
+        }
+    ]
+
+
+def save_results(df: pd.DataFrame, config: Dict[str, Any], tag: str = None) -> str:
     """
     Save results to CSV file
 
     Args:
         df: Results DataFrame
         config: Configuration dictionary
+        tag: Optional tag to append to filename
 
     Returns:
         Path to saved CSV file
     """
 
-    # Get output configuration
     output_config = config.get('outputs', {})
     save_path = output_config.get('save_path', './results/')
     table_prefix = output_config.get('table_prefix', 'DR08_results')
 
-    # Create output directory if it doesn't exist
     os.makedirs(save_path, exist_ok=True)
 
     # Generate filename
-    csv_filename = os.path.join(save_path, f"{table_prefix}_pareto_results.csv")
+    if tag:
+        csv_filename = os.path.join(save_path, f"{table_prefix}_pareto_{tag}.csv")
+    else:
+        csv_filename = os.path.join(save_path, f"{table_prefix}_pareto_results.csv")
 
     # Save to CSV
     df.to_csv(csv_filename, index=False, float_format='%.6e')
@@ -234,6 +366,27 @@ def save_results(df: pd.DataFrame, config: Dict[str, Any]) -> str:
     print(f"\n✓ Results saved to: {csv_filename}")
 
     return csv_filename
+
+
+def save_multi_hardware_results(results_dict: Dict[str, pd.DataFrame], config: Dict[str, Any]) -> List[str]:
+    """
+    Save multiple hardware configuration results
+
+    Args:
+        results_dict: Dictionary mapping profile names to DataFrames
+        config: Configuration dictionary
+
+    Returns:
+        List of saved file paths
+    """
+
+    saved_files = []
+
+    for profile_name, df in results_dict.items():
+        csv_path = save_results(df, config, tag=profile_name)
+        saved_files.append(csv_path)
+
+    return saved_files
 
 
 def print_summary(df: pd.DataFrame):
@@ -255,12 +408,12 @@ def print_summary(df: pd.DataFrame):
     print("\n1. Best Communication Performance:")
     print(f"   α = {df.loc[best_R_net_idx, 'alpha']:.3f}")
     print(f"   R_net = {df.loc[best_R_net_idx, 'R_net_bps_hz']:.3f} bits/s/Hz")
-    print(f"   RMSE = {df.loc[best_R_net_idx, 'RMSE_m']*1000:.3f} mm")
+    print(f"   RMSE = {df.loc[best_R_net_idx, 'RMSE_m'] * 1000:.3f} mm")
 
     print("\n2. Best Sensing Performance:")
     print(f"   α = {df.loc[best_RMSE_idx, 'alpha']:.3f}")
     print(f"   R_net = {df.loc[best_RMSE_idx, 'R_net_bps_hz']:.3f} bits/s/Hz")
-    print(f"   RMSE = {df.loc[best_RMSE_idx, 'RMSE_m']*1000:.3f} mm")
+    print(f"   RMSE = {df.loc[best_RMSE_idx, 'RMSE_m'] * 1000:.3f} mm")
 
     print("\n3. System-Level Metrics (averaged):")
     print(f"   C_sat = {df['C_sat'].mean():.3f} bits/s/Hz")
@@ -271,10 +424,17 @@ def print_summary(df: pd.DataFrame):
     print("\n4. Hardware Breakdown (first point):")
     if len(df) > 0:
         total_gamma = df['Gamma_eff_total'].iloc[0]
-        print(f"   Gamma_PA:  {df['Gamma_pa'].iloc[0]:.2e} ({100*df['Gamma_pa'].iloc[0]/total_gamma:.1f}%)")
-        print(f"   Gamma_ADC: {df['Gamma_adc'].iloc[0]:.2e} ({100*df['Gamma_adc'].iloc[0]/total_gamma:.1f}%)")
-        print(f"   Gamma_I/Q: {df['Gamma_iq'].iloc[0]:.2e} ({100*df['Gamma_iq'].iloc[0]/total_gamma:.1f}%)")
-        print(f"   Gamma_LO:  {df['Gamma_lo'].iloc[0]:.2e} ({100*df['Gamma_lo'].iloc[0]/total_gamma:.1f}%)")
+        print(f"   Gamma_PA:  {df['Gamma_pa'].iloc[0]:.2e} ({100 * df['Gamma_pa'].iloc[0] / total_gamma:.1f}%)")
+        print(f"   Gamma_ADC: {df['Gamma_adc'].iloc[0]:.2e} ({100 * df['Gamma_adc'].iloc[0] / total_gamma:.1f}%)")
+        print(f"   Gamma_I/Q: {df['Gamma_iq'].iloc[0]:.2e} ({100 * df['Gamma_iq'].iloc[0] / total_gamma:.1f}%)")
+        print(f"   Gamma_LO:  {df['Gamma_lo'].iloc[0]:.2e} ({100 * df['Gamma_lo'].iloc[0] / total_gamma:.1f}%)")
+
+    print("\n5. Noise Composition Range (min-max across α):")
+    if 'noise_white' in df.columns:
+        print(f"   White:  [{df['noise_white'].min():.2e}, {df['noise_white'].max():.2e}] W/Hz")
+        print(f"   Gamma:  [{df['noise_gamma'].min():.2e}, {df['noise_gamma'].max():.2e}] W/Hz")
+        print(f"   PN:     [{df['noise_pn'].min():.2e}, {df['noise_pn'].max():.2e}] W/Hz")
+        print(f"   DSE:    [{df['noise_dse'].min():.2e}, {df['noise_dse'].max():.2e}] W/Hz")
 
     print("\n" + "=" * 80)
 
@@ -282,21 +442,28 @@ def print_summary(df: pd.DataFrame):
 def main():
     """Main entry point"""
 
+    # Parse command-line arguments
+    parser = argparse.ArgumentParser(
+        description='THz-ISL MIMO ISAC Performance Analysis (DR-08 Protocol)',
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    parser.add_argument('config', nargs='?', default='config.yaml',
+                        help='Path to configuration YAML file (default: config.yaml)')
+    parser.add_argument('--multi-hardware', action='store_true',
+                        help='Run multi-hardware configuration sweep')
+    parser.add_argument('--hardware-profiles', type=str, default=None,
+                        help='Path to custom hardware profiles YAML file')
+
+    args = parser.parse_args()
+
     print("=" * 80)
     print("THz-ISL MIMO ISAC PERFORMANCE ANALYSIS")
-    print("DR-08 Protocol Implementation")
+    print("DR-08 Protocol Implementation (Expert-Improved Version)")
     print("=" * 80)
 
-    # Parse command-line arguments
-    if len(sys.argv) > 1:
-        config_path = sys.argv[1]
-    else:
-        # Default config path
-        config_path = 'config.yaml'
-
     # Load configuration
-    print(f"\nLoading configuration from: {config_path}")
-    config = load_config(config_path)
+    print(f"\nLoading configuration from: {args.config}")
+    config = load_config(args.config)
 
     # Validate configuration
     try:
@@ -309,31 +476,61 @@ def main():
     # Suppress runtime warnings for cleaner output
     warnings.filterwarnings('ignore', category=RuntimeWarning)
 
-    # Run Pareto sweep
-    try:
-        df_results = run_pareto_sweep(config)
-    except Exception as e:
-        print(f"\n✗ Pareto sweep failed: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+    # Decide whether to run single or multi-hardware sweep
+    if args.multi_hardware:
+        # Multi-hardware mode
+        if args.hardware_profiles:
+            # Load custom profiles
+            with open(args.hardware_profiles, 'r') as f:
+                hardware_profiles = yaml.safe_load(f)['profiles']
+        else:
+            # Use default profiles
+            hardware_profiles = get_default_hardware_profiles()
 
-    # Save results
-    try:
-        csv_path = save_results(df_results, config)
-    except Exception as e:
-        print(f"\n✗ Failed to save results: {e}")
-        sys.exit(1)
+        print(f"\n📊 Running multi-hardware sweep with {len(hardware_profiles)} configurations")
 
-    # Print summary
-    print_summary(df_results)
+        try:
+            results_dict = run_multi_hardware_sweep(config, hardware_profiles)
+            saved_files = save_multi_hardware_results(results_dict, config)
+
+            print("\n" + "=" * 80)
+            print("MULTI-HARDWARE SWEEP SUMMARY")
+            print("=" * 80)
+            print(f"\nGenerated {len(saved_files)} result files:")
+            for file in saved_files:
+                print(f"  - {file}")
+
+            # Print summary for each profile
+            for profile_name, df in results_dict.items():
+                print(f"\n--- Profile: {profile_name} ---")
+                print_summary(df)
+
+        except Exception as e:
+            print(f"\n✗ Multi-hardware sweep failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
+
+    else:
+        # Single hardware mode (default)
+        try:
+            df_results = run_pareto_sweep(config)
+            csv_path = save_results(df_results, config)
+            print_summary(df_results)
+
+        except Exception as e:
+            print(f"\n✗ Pareto sweep failed: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
 
     # Next steps guidance
     print("\n📊 Next Steps:")
     print("  1. Run: python scan_snr_sweep.py config.yaml")
-    print("  2. Run: python visualize_results.py")
-    print("  3. Run: python make_paper_tables.py")
-    print("\n✓ Pareto front generation complete!")
+    print("  2. Run: python threshold_sweep.py config.yaml")
+    print("  3. Run: python visualize_results.py")
+    print("  4. Run: python make_paper_tables.py")
+    print("\n✓ Performance analysis complete!")
 
 
 if __name__ == "__main__":

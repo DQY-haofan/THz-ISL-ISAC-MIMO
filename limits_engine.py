@@ -161,6 +161,24 @@ def calc_BCRLB(
     A = np.sqrt((P_sig_psd_target * T_obs) / (denom * B_hz))
     s_k = A * s_k_shape
 
+    # ========================================================================
+    # EXPERT RECOMMENDATION: Parseval Energy Conservation Check
+    # This validates signal amplitude calibration for RMSE (Document 1)
+    # ========================================================================
+    if config.get('debug', {}).get('assert_parseval', False):
+        # Frequency domain energy
+        E_freq = np.sum(np.abs(s_k) ** 2) * n_f_outputs['Delta_f_hz']
+        # Time domain energy (target)
+        E_time = P_sig_psd_target * T_obs
+        # Relative error
+        rel_err = abs(E_freq - E_time) / max(E_time, np.finfo(float).eps)
+
+        if rel_err > 1e-3:
+            warnings.warn(f"Parseval energy mismatch: {rel_err:.3e} (freq={E_freq:.2e}, time={E_time:.2e})")
+
+        if config.get('debug', {}).get('print_bcrlb_scaling', False):
+            print(f"  [Parseval Check] E_freq={E_freq:.2e}, E_time={E_time:.2e}, rel_err={rel_err:.3e}")
+
     if config.get('debug', {}).get('assert_parseval', False):
         E_freq = np.sum(np.abs(s_k) ** 2) * n_f_outputs['Delta_f_hz']
         E_time = P_sig_psd_target * T_obs
@@ -186,7 +204,7 @@ def calc_BCRLB(
         FIM, CRLB_matrix = _compute_whittle_fim(s_k, ds_dtau_k, ds_dfD_k_exact, N_k_psd, Delta_f_hz)
 
     elif FIM_MODE == 'Cholesky':
-        FIM, CRLB_matrix = _compute_cholesky_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, B_hz)
+        FIM, CRLB_matrix = _compute_cholesky_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, N, B_hz)
 
     else:
         warnings.warn(f"Unknown FIM_MODE='{FIM_MODE}', falling back to Whittle")
@@ -203,7 +221,6 @@ def calc_BCRLB(
         'FIM': FIM,
         'Delta_f_hz': Delta_f_hz
     }
-
 
 
 def _compute_whittle_fim(
