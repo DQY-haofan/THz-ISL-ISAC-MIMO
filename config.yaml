@@ -117,7 +117,7 @@ simulation:
     - 50
 
   SNR0_db_fixed: 20.0       # Fixed SNR for Pareto sweep
-  SNR_sweep_points: 50      # Points in SNR sweep
+  SNR_sweep_points: 100     # Points in SNR sweep
 
 outputs:
   save_path: ./results/
