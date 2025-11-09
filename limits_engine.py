@@ -38,12 +38,9 @@ def calc_C_J(
         SNR0_db_vec: Union[List[float], np.ndarray],
         compute_C_G: bool = False
 ) -> Dict[str, Union[float, np.ndarray]]:
-    """
-    Calculate communication capacity (Jensen bound) - DR-08, Sec 5.1
-    FIXED: C_G denominator now uses frequency-dependent G_sig_f
-    """
+    """Calculate communication capacity (Jensen bound) - EXPERT FIXED"""
 
-    # PN once-counting for COMMUNICATION
+    # ✅ EXPERT FIX: 使用包含阵列增益的G_sig_avg
     G_sig_avg = g_sig_factors['G_sig_avg']
     sigma_2_phi_c_res = n_f_outputs['sigma_2_phi_c_res']
     Gamma_eff_total = n_f_outputs['Gamma_eff_total']
@@ -53,6 +50,7 @@ def calc_C_J(
     C_J_vec = np.zeros_like(SNR0_vec)
 
     for i, SNR0 in enumerate(SNR0_vec):
+        # ✅ EXPERT FIX: SNR包含阵列增益
         numerator = SNR0 * G_sig_avg * phase_coherence_loss
         denominator = 1.0 + SNR0 * G_sig_avg * Gamma_eff_total
         SINR_eff = numerator / denominator
@@ -61,6 +59,7 @@ def calc_C_J(
     SINR_sat = phase_coherence_loss / Gamma_eff_total
     C_sat = np.log2(1.0 + SINR_sat)
 
+    # ✅ EXPERT FIX: 临界SNR随阵列左移 (单位: 线性)
     SNR_crit_linear = 1.0 / (G_sig_avg * Gamma_eff_total)
     SNR_crit_db = 10.0 * np.log10(SNR_crit_linear)
 
@@ -77,7 +76,7 @@ def calc_C_J(
         N = config['simulation']['N']
         eta_bsq_k = g_sig_factors['eta_bsq_k']
 
-        G_scalars = (g_sig_factors['G_sig_ideal'] *
+        G_scalars = (g_sig_factors['g_ar'] *
                      g_sig_factors['rho_Q'] *
                      g_sig_factors['rho_APE'] *
                      g_sig_factors['rho_A'] *
@@ -87,8 +86,6 @@ def calc_C_J(
 
         for i, SNR0 in enumerate(SNR0_vec):
             G_sig_f = G_scalars * eta_bsq_k
-
-            # CRITICAL FIX: Use frequency-dependent G_sig_f in denominator
             denominator_f = 1.0 + SNR0 * G_sig_f * Gamma_eff_total
             SINR_f = (SNR0 * G_sig_f * phase_coherence_loss) / denominator_f
             C_G_vec[i] = np.mean(np.log2(1.0 + SINR_f))
@@ -105,99 +102,67 @@ def calc_BCRLB(
         g_sig_factors: Dict[str, Union[float, np.ndarray]],
         n_f_outputs: Dict[str, Union[float, np.ndarray]]
 ) -> Dict[str, Union[float, np.ndarray]]:
-    """
-    Calculate Bayesian Cramer-Rao Lower Bound (matched case) - DR-08, Sec 5.2
+    """Calculate Bayesian Cramer-Rao Lower Bound - EXPERT FIXED"""
 
-    关键修复：用 ESD/观测时长 标定信号幅度（而不是 PSD），避免把 FIM 推爆、CRLB 压扁。
-    """
-
-    import warnings
     N = config['simulation']['N']
     B_hz = config['channel']['B_hz']
     FIM_MODE = config['simulation'].get('FIM_MODE', 'Whittle')
 
-    # —— 噪声 PSD（Whittle-一次计量：频域用 N_k_psd 向量）——
     N_k_psd = n_f_outputs['N_k_psd']
     Delta_f_hz = n_f_outputs['Delta_f_hz']
 
-    # —— 频率相关的阵列/硬件形状 ——
-    eta_bsq_k = g_sig_factors['eta_bsq_k']
-    G_scalars = (g_sig_factors['G_sig_ideal'] *
-                 g_sig_factors['rho_Q'] *
-                 g_sig_factors['rho_APE'] *
-                 g_sig_factors['rho_A'] *
-                 g_sig_factors['rho_PN'])
+    # ✅ EXPERT FIX: 使用sig_amp_k (已包含sqrt(g_ar))
+    sig_amp_k = g_sig_factors['sig_amp_k']
 
-    # =============  幅度归一化：按 “能量=功率×时间” 进行  =============
-    # 形状：不含绝对幅度（方便统一缩放）
-    s_k_shape = np.sqrt(G_scalars * eta_bsq_k)
-
-    # 基础白噪 PSD（W/Hz）。你文件已返回 N0_psd；若缺省则用中位数兜底。
+    # 信号幅度标定
     N0_psd = n_f_outputs.get('N0_psd', None)
     if N0_psd is None:
         N0_psd = np.median(N_k_psd)
-        warnings.warn(f"N0_psd not found, using median(N_k_psd) = {N0_psd:.2e}")
+        warnings.warn(f"N0_psd not found, using median: {N0_psd:.2e}")
 
-    # 观测 SNR_p（支持 alpha 的能量/功率模型）
     alpha = config['isac_model']['alpha']
     alpha_model = config['isac_model'].get('alpha_model', 'CONST_POWER')
-    base_SNRp_db = config['isac_model'].get('SNR_p_db',
-                                            config['simulation'].get('SNR0_db_fixed', 20.0))
+    base_SNRp_db = config['isac_model'].get('SNR_p_db', 20.0)
+
     if alpha_model == 'CONST_POWER':
         SNR_p_db = base_SNRp_db
     elif alpha_model == 'CONST_ENERGY':
         SNR_p_db = base_SNRp_db + 10 * np.log10(max(alpha, np.finfo(float).eps))
     else:
         SNR_p_db = base_SNRp_db
+
     SNR_p = 10.0 ** (SNR_p_db / 10.0)
+    P_sig_psd_target = SNR_p * N0_psd
+    T_obs = N / B_hz
 
-    # 目标功率谱密度（W/Hz）
-    P_sig_psd_target = SNR_p * N0_psd  # [W/Hz]
-    T_obs = N / B_hz  # 观测时长 [s]
-    mean_eta = float(np.mean(eta_bsq_k))
-    denom = max(G_scalars * mean_eta, np.finfo(float).eps)
+    # ✅ CRITICAL: 使用sig_amp_k标定信号幅度
+    # sig_amp_k = sqrt(g_ar) * eta_bsq_k 已正确包含阵列增益
+    E_sig_target = P_sig_psd_target * T_obs  # 目标总能量 [J]
+    E_sig_current = np.sum(np.abs(sig_amp_k) ** 2) * Delta_f_hz  # 当前能量 [J]
+    A = np.sqrt(E_sig_target / E_sig_current)  # 标定系数
+    s_k = A * sig_amp_k  # 最终信号
 
-    # A^2 = (P_sig * T_obs) / (B * denom)   （其中 denom = G_scalars * <eta>）
-    A = np.sqrt((P_sig_psd_target * T_obs) / (denom * B_hz))
-    s_k = A * s_k_shape
-
-    # ========================================================================
-    # EXPERT RECOMMENDATION: Parseval Energy Conservation Check
-    # This validates signal amplitude calibration for RMSE (Document 1)
-    # ========================================================================
+    # Parseval能量守恒检查
     if config.get('debug', {}).get('assert_parseval', False):
-        # Frequency domain energy
-        E_freq = np.sum(np.abs(s_k) ** 2) * n_f_outputs['Delta_f_hz']
-        # Time domain energy (target)
+        E_freq = np.sum(np.abs(s_k) ** 2) * Delta_f_hz
         E_time = P_sig_psd_target * T_obs
-        # Relative error
         rel_err = abs(E_freq - E_time) / max(E_time, np.finfo(float).eps)
-
         if rel_err > 1e-3:
             warnings.warn(f"Parseval energy mismatch: {rel_err:.3e} (freq={E_freq:.2e}, time={E_time:.2e})")
 
-        if config.get('debug', {}).get('print_bcrlb_scaling', False):
-            print(f"  [Parseval Check] E_freq={E_freq:.2e}, E_time={E_time:.2e}, rel_err={rel_err:.3e}")
-
-    if config.get('debug', {}).get('assert_parseval', False):
-        E_freq = np.sum(np.abs(s_k) ** 2) * n_f_outputs['Delta_f_hz']
-        E_time = P_sig_psd_target * T_obs
-        rel_err = abs(E_freq - E_time) / max(E_time, np.finfo(float).eps)
-        assert rel_err < 1e-3, f"Parseval energy mismatch: {rel_err:.3e}"
-
-    # —— 构造梯度并计算 FIM ——
+    # 梯度计算
     f_vec = np.linspace(-B_hz / 2, B_hz / 2, N)
-    t_obs = T_obs
     ds_dtau_k = -1j * 2 * np.pi * f_vec * s_k
-    # 频移梯度（Whittle 近似）：∂s/∂fD ≈ j 2π t_obs s_k
-    ds_dfD_k = 1j * 2 * np.pi * t_obs * s_k
+    ds_dfD_k = 1j * 2 * np.pi * T_obs * s_k
+
+    # ✅ 注意：不要在梯度侧再乘exp(-σ²_φ)，那是通信口径
+    # 感知端用频域噪声谱N_k_psd (已包含PN谱)
 
     if FIM_MODE == 'Whittle':
         FIM, CRLB_matrix = _compute_whittle_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz)
 
     elif FIM_MODE == 'Whittle-ExactDoppler':
-        # 先到时域做“确切”多普勒梯度，再回频域
-        t_vec = np.linspace(-t_obs / 2, t_obs / 2, N)
+        t_vec = np.linspace(-T_obs / 2, T_obs / 2, N)
         s_t = np.fft.ifft(np.fft.ifftshift(s_k)) * N
         ds_dfD_t = 1j * 2 * np.pi * t_vec * s_t
         ds_dfD_k_exact = np.fft.fftshift(np.fft.fft(ds_dfD_t)) / N
@@ -210,7 +175,6 @@ def calc_BCRLB(
         warnings.warn(f"Unknown FIM_MODE='{FIM_MODE}', falling back to Whittle")
         FIM, CRLB_matrix = _compute_whittle_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz)
 
-    # —— 取对角得到 BCRLB ——
     BCRLB_tau = max(CRLB_matrix[0, 0].real, np.finfo(float).eps)
     BCRLB_fD = max(CRLB_matrix[1, 1].real, np.finfo(float).eps)
 
@@ -265,7 +229,7 @@ def _compute_cholesky_fim(
         N: int,
         B_hz: float
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Compute FIM using Cholesky decomposition with enhanced stability"""
+    """Compute FIM using Cholesky decomposition"""
 
     s_t = np.fft.ifft(np.fft.ifftshift(s_k)) * N
     ds_dtau_t = np.fft.ifft(np.fft.ifftshift(ds_dtau_k)) * N
@@ -289,7 +253,7 @@ def _compute_cholesky_fim(
     eigenvals = np.linalg.eigvalsh(R_n)
     if np.any(eigenvals <= 0):
         min_eig = np.min(eigenvals)
-        warnings.warn(f"Negative eigenvalue detected: {min_eig:.2e}, adding correction")
+        warnings.warn(f"Negative eigenvalue detected: {min_eig:.2e}")
         R_n += (abs(min_eig) + 1e-10) * np.eye(N)
 
     try:
@@ -328,17 +292,12 @@ def calc_MCRB(
     Phi_q = config.get('waveform', {}).get('Phi_q', 0.1)
     Phi_q_rad = Phi_q
 
-    bcrlb_results = calc_BCRLB(config, g_factors, n_f_outputs)
+    bcrlb_results = calc_BCRLB(config, g_sig_factors, n_f_outputs)
     F_matched = bcrlb_results['FIM']
     K = F_matched
 
-    eta_bsq_k = g_sig_factors['eta_bsq_k']
-    G_scalars = (g_sig_factors['G_sig_ideal'] *
-                 g_sig_factors['rho_Q'] *
-                 g_sig_factors['rho_APE'] *
-                 g_sig_factors['rho_A'] *
-                 g_sig_factors['rho_PN'])
-    s_k = np.sqrt(G_scalars * eta_bsq_k)
+    sig_amp_k = g_sig_factors['sig_amp_k']
+    s_k = sig_amp_k  # Simplified for mismatch calculation
 
     t_vec = np.linspace(-N / (2 * B_hz), N / (2 * B_hz), N)
     t_obs = N / B_hz
@@ -356,7 +315,6 @@ def calc_MCRB(
     N_k_psd_safe = np.maximum(N_k_psd, eps)
 
     E_bias = np.zeros((2, 2))
-
     integrand_tt = (1.0 / N_k_psd_safe) * 2 * np.real(np.conj(d2s_dtau2_k) * s_diff_f)
     E_bias[0, 0] = -np.sum(integrand_tt) * Delta_f_hz
 

@@ -3,21 +3,21 @@
   <component name="CsvFileAttributes">
     <option name="attributeMap">
       <map>
-        <entry key="\results\DR08_improved_pareto_results.csv">
+        <entry key="\results\DR08_pareto_results.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />
             </Attribute>
           </value>
         </entry>
-        <entry key="\results\DR08_results_pareto_results.csv">
+        <entry key="\results\DR08_snr_sweep.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />
             </Attribute>
           </value>
         </entry>
-        <entry key="\results\DR08_results_snr_sweep.csv">
+        <entry key="\results\fig_A_CONST_POWER_data.csv">
           <value>
             <Attribute>
               <option name="separator" value="," />
