@@ -78,7 +78,7 @@ isac_model:
 
   # ===== 关键功能: DSE自动校准 =====
   DSE_autotune: true
-  alpha_star_target: 0.3   # PN和DSE交叉点目标值
+  alpha_star_target: 0.1   # PN和DSE交叉点目标值
 
   # 说明:
   # - 当 α > 0.08 时: PN主导，RMSE随α缓慢改善

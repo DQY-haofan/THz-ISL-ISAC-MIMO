@@ -17,13 +17,6 @@
             </Attribute>
           </value>
         </entry>
-        <entry key="\results\fig_A_CONST_POWER_data.csv">
-          <value>
-            <Attribute>
-              <option name="separator" value="," />
-            </Attribute>
-          </value>
-        </entry>
         <entry key="\results\mimo_scaling_data.csv">
           <value>
             <Attribute>
