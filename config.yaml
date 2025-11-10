@@ -16,7 +16,7 @@ array:
 
 channel:
   f_c_hz: 140000000000.0    # 140 GHz
-  B_hz: 2000000000.0       # 10 GHz bandwidth (专家建议: 10-20 GHz)
+  B_hz: 20000000000.0       # 10 GHz bandwidth (专家建议: 10-20 GHz)
   c_mps: 299792458.0        # Speed of light
 
 hardware:
@@ -68,7 +68,7 @@ isac_model:
   L_TTD_db: 2.0             # TTD insertion loss
   C_PN: 0.0001               # Phase noise calibration constant
   C_DSE: 0.000000005        # DSE base constant (会被自动校准覆盖)
-  SNR_p_db: 60.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
+  SNR_p_db: 15.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
 
   # ISAC model mode
   alpha_model: CONST_ENERGY # 恒功率模式
