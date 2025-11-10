@@ -16,7 +16,7 @@ array:
 
 channel:
   f_c_hz: 140000000000.0    # 140 GHz
-  B_hz: 20000000000.0       # 10 GHz bandwidth (专家建议: 10-20 GHz)
+  B_hz: 2000000000.0       # 10 GHz bandwidth (专家建议: 10-20 GHz)
   c_mps: 299792458.0        # Speed of light
 
 hardware:
@@ -55,6 +55,12 @@ pn_model:
   # Transfer function model
   H_err_model_type: FirstOrderHPF
   sigma_rel_sq_rad2: 0.01   # Differential PN variance
+  alpha_exponent: -1.0      # PN随α的指数（专家建议）
+
+dse_model:
+  alpha_exponent: -5.0      # DSE随α的指数（默认-5）
+  C_DSE: null               # DSE常数（null=自动校准）
+  alpha_star: 0.05          # PN-DSE交叉点
 
 isac_model:
   alpha: 0.1                # Default ISAC overhead (单点运行时使用)
@@ -62,7 +68,7 @@ isac_model:
   L_TTD_db: 2.0             # TTD insertion loss
   C_PN: 0.0001               # Phase noise calibration constant
   C_DSE: 0.000000005        # DSE base constant (会被自动校准覆盖)
-  SNR_p_db: 10.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
+  SNR_p_db: 60.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
 
   # ISAC model mode
   alpha_model: CONST_ENERGY # 恒功率模式

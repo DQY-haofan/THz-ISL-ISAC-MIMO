@@ -299,65 +299,6 @@ def find_alpha_crossover(df: pd.DataFrame) -> tuple:
         return None, None, None
 
 
-def plot_pn_dse_crossover(df: pd.DataFrame, output_dir: Path, colors: dict):
-    """Figure 1: PN vs DSE Crossover (semi-log)"""
-
-    print(f"\n{'=' * 70}")
-    print("FIGURE 1: PN vs DSE CROSSOVER")
-    print(f"{'=' * 70}")
-
-    alpha_cross, pn_cross, dse_cross = find_alpha_crossover(df)
-
-    if alpha_cross is not None:
-        print(f"  Crossover: α* = {alpha_cross:.4f}")
-        print(f"  Ratio: DSE/PN = {dse_cross / pn_cross:.3f}")
-
-    fig, ax = plt.subplots()
-
-    # Plot PN
-    ax.plot(df['alpha'], df['sigma_2_phi_c_res_rad2'],
-            marker='o', markersize=4, linewidth=1.0,
-            color=colors['pn'], label=r'$\sigma^2_{\phi,c,\mathrm{res}}$',
-            markeredgecolor='black', markeredgewidth=0.3)
-
-    # Plot DSE
-    ax.plot(df['alpha'], df['sigma_2_DSE_var'],
-            marker='s', markersize=4, linewidth=1.0,
-            color=colors['dse'], label=r'$\sigma^2_{\mathrm{DSE}}$',
-            markeredgecolor='black', markeredgewidth=0.3)
-
-    # Mark crossover
-    if alpha_cross is not None:
-        ax.axvline(x=alpha_cross, color=colors['red'], linestyle='--',
-                   linewidth=1.5, alpha=0.7)
-        ax.plot(alpha_cross, pn_cross, 'r*', markersize=12,
-                markeredgecolor='darkred', markeredgewidth=0.5)
-
-        ax.text(alpha_cross + 0.015, pn_cross * 0.5,
-                f'$\\alpha^* = {alpha_cross:.3f}$',
-                color=colors['red'], fontsize=8,
-                bbox=dict(boxstyle='round,pad=0.3',
-                          facecolor='white',
-                          edgecolor=colors['red'],
-                          linewidth=1.0,
-                          alpha=0.95))
-
-    ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
-    ax.set_ylabel(r'Variance (rad$^2$)', fontsize=8)
-    ax.set_yscale('log')
-    ax.legend(loc='upper right', fontsize=8)
-    ax.grid(True, alpha=0.3)
-
-    plt.tight_layout()
-
-    for ext in ['png', 'pdf']:
-        output_file = output_dir / f'fig_pn_dse_crossover.{ext}'
-        plt.savefig(output_file, dpi=300, bbox_inches='tight')
-        print(f"  ✓ Saved: {output_file.name}")
-
-    plt.close()
-    return True
-
 
 def plot_performance_vs_alpha(df: pd.DataFrame, output_dir: Path, colors: dict):
     """Figure 2: R_net and RMSE vs Alpha (dual Y-axis)"""
@@ -586,8 +527,7 @@ def generate_all_visualizations(pareto_csv: str = None, snr_csv: str = None,
         df_pareto = pd.read_csv(pareto_csv)
 
         # Figure 1: PN vs DSE crossover
-        if plot_pn_dse_crossover(df_pareto, output_dir, colors):
-            success_count += 1
+
 
         # Figure 2: Performance vs alpha
         if plot_performance_vs_alpha(df_pareto, output_dir, colors):

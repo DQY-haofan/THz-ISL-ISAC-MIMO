@@ -83,7 +83,7 @@ def calc_g_sig_factors(config: Dict[str, Any]) -> Dict[str, Union[float, np.ndar
     rho_PN = np.exp(-sigma_rel_sq_rad2)
 
     # ✅ Combined signal gain (for communication)
-    G_sig_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A * rho_PN
+    G_sig_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
 
     # ✅ Frequency-dependent signal amplitude (for sensing/FIM)
     sig_amp_k = np.sqrt(g_ar) * eta_bsq_k
@@ -147,7 +147,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Component distortion coefficients (per element)
     Gamma_pa = gamma_pa_floor + (10 ** (papr_db / 10) / 10 ** (ibo_db / 10)) * 1e-3
     Gamma_adc = 1.0 / (3.0 * (2 ** (2 * gamma_adc_bits)))
-    Gamma_iq = 10 ** (-gamma_iq_irr_dbc / 10.0)
+    Gamma_iq = 10 ** (-abs(gamma_iq_irr_dbc) / 10.0)  # 不受输入正负号影响
     Gamma_lo = (2 * np.pi * f_c_hz * gamma_lo_jitter_s) ** 2
     Gamma_eff_per_element = Gamma_pa + Gamma_adc + Gamma_iq + Gamma_lo
 
@@ -196,8 +196,27 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Dynamic scan error (DSE)
     # ===================================================================
     alpha_safe = max(alpha, np.finfo(float).eps)
-    sigma2_DSE = C_DSE * (alpha_safe ** DSE_alpha_exponent)
-    S_DSE_k = np.ones(N) * (sigma2_DSE / B_hz)
+    pn_alpha_exp = config['pn_model'].get('alpha_exponent', -1.0)  # 缺省 −1
+    S_phi_c_res_k *= alpha_safe ** pn_alpha_exp
+    sigma_2_phi_c_res *= alpha_safe ** pn_alpha_exp
+
+    # ===================================================================
+    # Dynamic Scan Error (DSE) - Model Mismatch Noise
+    # ===================================================================
+    dse_cfg = config.get('dse_model', {})
+    dse_alpha_exp = float(dse_cfg.get('alpha_exponent', -5.0))
+    C_DSE_cfg = dse_cfg.get('C_DSE', None)
+
+    # Auto-calibration: C_DSE to make DSE cross PN at alpha_star
+    if C_DSE_cfg is None:
+        alpha_star = float(dse_cfg.get('alpha_star', 0.05))
+        sigma2_pn_base = sigma_2_phi_c_res / (alpha_safe ** pn_alpha_exp)
+        sigma2_pn_star = sigma2_pn_base * (alpha_star ** pn_alpha_exp)
+        C_DSE_cfg = float(sigma2_pn_star) * (alpha_star ** 4)
+
+    # DSE variance and PSD
+    sigma2_DSE = float(C_DSE_cfg) / (alpha_safe ** (-dse_alpha_exp))
+    S_DSE_k = np.full(N, sigma2_DSE / B_hz, dtype=float)
 
     # ===================================================================
     # Range sidelobe modulation (RSM)

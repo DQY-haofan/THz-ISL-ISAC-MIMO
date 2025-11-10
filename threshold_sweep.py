@@ -211,6 +211,25 @@ def run_threshold_sweep(config_path: str = 'config.yaml',
     stats_df.to_csv(stats_csv, index=False)
     print(f"  ✓ Statistics saved to: {stats_csv}")
 
+    # ========== NEW: Save detailed data points ==========
+    print(f"  [Extra] Saving detailed data points...")
+    detailed_rows = []
+    for i, B_over_fc in enumerate(B_over_fc_vec):
+        for j, Lap_over_lambda in enumerate(Lap_over_lambda_vec):
+            detailed_rows.append({
+                'B_over_fc': B_over_fc,
+                'Lap_over_lambda': Lap_over_lambda,
+                'crlb_whittle': crlb_whittle_matrix[i, j],
+                'crlb_cholesky': crlb_cholesky_matrix[i, j],
+                'relative_error': error_matrix[i, j]
+            })
+
+    detailed_df = pd.DataFrame(detailed_rows)
+    detailed_csv = os.path.join(save_path, 'threshold_detailed_data.csv')
+    detailed_df.to_csv(detailed_csv, index=False, float_format='%.6e')
+    print(f"  ✓ Detailed data saved to: {detailed_csv}")
+    # ====================================================
+
     # Generate heatmap
     print(f"\n[5/5] Generating heatmap...")
 
@@ -278,7 +297,10 @@ def run_threshold_sweep(config_path: str = 'config.yaml',
     plt.tight_layout()
 
     # Save figure
-    fig_path = os.path.join(save_path, 'threshold_validation_heatmap.pdf')
+    # Save to figures/ directory instead of results/
+    figure_path = base_config.get('outputs', {}).get('figure_path', './figures/')
+    os.makedirs(figure_path, exist_ok=True)
+    fig_path = os.path.join(figure_path, 'threshold_validation_heatmap.pdf')
     plt.savefig(fig_path, dpi=300, bbox_inches='tight')
     plt.savefig(fig_path.replace('.pdf', '.png'), dpi=150, bbox_inches='tight')
     print(f"  ✓ Heatmap saved to: {fig_path}")
