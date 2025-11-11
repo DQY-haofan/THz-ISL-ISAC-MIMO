@@ -147,7 +147,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Component distortion coefficients (per element)
     Gamma_pa = gamma_pa_floor + (10 ** (papr_db / 10) / 10 ** (ibo_db / 10)) * 1e-3
     Gamma_adc = 1.0 / (3.0 * (2 ** (2 * gamma_adc_bits)))
-    Gamma_iq = 10 ** (-abs(gamma_iq_irr_dbc) / 10.0)  # 不受输入正负号影响
+    Gamma_iq = 10 ** (abs(gamma_iq_irr_dbc) / 10.0)  # 不受输入正负号影响
     Gamma_lo = (2 * np.pi * f_c_hz * gamma_lo_jitter_s) ** 2
     Gamma_eff_per_element = Gamma_pa + Gamma_adc + Gamma_iq + Gamma_lo
 

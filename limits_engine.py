@@ -153,7 +153,7 @@ def calc_BCRLB(
     # ===================================================================
     # G_grad_avg represents the gradient-side gain WITHOUT common phase noise loss
     # This ensures |s_k|² ∝ g_ar is preserved, enabling proper MIMO scaling
-    G_grad_avg = (g_sig_factors['g_ar'] * g_sig_factors['eta_bsq_avg']
+    G_grad_avg = (g_sig_factors['eta_bsq_avg']
                   * g_sig_factors['rho_Q'] * g_sig_factors['rho_APE']
                   * g_sig_factors['rho_A'])  # Note: NO rho_PN here
 

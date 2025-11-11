@@ -10,6 +10,7 @@ Generated Figures:
 1. fig_gamma_breakdown       - Hardware distortion breakdown (percentage only)
 2. fig_ablation_alpha_rnet   - Alpha policy ablation (R_net)
 3. fig_ablation_alpha_rmse   - Alpha policy ablation (RMSE)
+4. fig_pn_dse_crossover      - PN vs DSE crossover analysis (NEW!)
 
 Usage:
     python generate_supplementary_figures.py [config.yaml]
@@ -284,7 +285,7 @@ def generate_figure_alpha_policy_rnet(config, output_dir='figures'):
             # Mark optimal point
             idx_max = np.argmax(data['R_net'])
             ax.plot(data['alpha'][idx_max], data['R_net'][idx_max],
-                    '*', markersize=12, color=color,
+                    markersize=12, color=color,
                     markeredgecolor='black', markeredgewidth=0.5)
 
     ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
@@ -362,7 +363,7 @@ def generate_figure_alpha_policy_rmse(config, output_dir='figures'):
             # Mark optimal point (minimum RMSE)
             idx_min = np.argmin(data['RMSE'])
             ax.plot(data['alpha'][idx_min], data['RMSE'][idx_min],
-                    '*', markersize=12, color=color,
+                     markersize=12, color=color,
                     markeredgecolor='black', markeredgewidth=0.5)
 
     ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
@@ -391,6 +392,167 @@ def generate_figure_alpha_policy_rmse(config, output_dir='figures'):
         df.to_csv(csv_path, index=False)
 
     plt.close()
+    return True
+
+
+def generate_figure_pn_dse_crossover(config, output_dir='figures', results_dir='results'):
+    """
+    PN vs DSE Crossover Analysis
+    生成CSV数据和图像，展示相位噪声和动态扫描误差的权衡
+
+    输出:
+    - CSV: results/pn_dse_crossover.csv
+    - PNG: figures/fig_pn_dse_crossover.png
+    - PDF: figures/fig_pn_dse_crossover.pdf
+    """
+    print("\n" + "=" * 80)
+    print("FIGURE: PN vs DSE Crossover Analysis")
+    print("=" * 80)
+
+    # 创建输出目录
+    output_dir = Path(output_dir)
+    results_dir = Path(results_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Alpha扫描范围（聚焦在交叉点附近）
+    alpha_min = 0.05
+    alpha_max = 0.30
+    n_points = 26
+    alpha_vec = np.linspace(alpha_min, alpha_max, n_points)
+
+    print(f"\n  Alpha range: [{alpha_min}, {alpha_max}]")
+    print(f"  Number of points: {n_points}")
+
+    # 提取相位噪声和DSE参数
+    pn_model = config.get('pn_model', {})
+    dse_model = config.get('dse_model', {})
+    isac_model = config.get('isac_model', {})
+
+    # 相位噪声参数
+    S_phi_c_K2 = float(pn_model.get('S_phi_c_K2', 200.0))
+    S_phi_c_K0 = float(pn_model.get('S_phi_c_K0', 1e-15))
+    B_loop_hz = float(pn_model.get('B_loop_hz', 1e6))
+    pn_alpha_exp = float(pn_model.get('alpha_exponent', -1.0))
+
+    # DSE参数
+    dse_alpha_exp = float(dse_model.get('alpha_exponent', -5.0))
+    C_DSE = dse_model.get('C_DSE', None)
+
+    # 如果C_DSE未设置，使用默认值或从isac_model获取
+    if C_DSE is None:
+        C_DSE = float(isac_model.get('C_DSE', 5e-9))
+    else:
+        C_DSE = float(C_DSE)
+
+    # 计算PN方差（基准值）
+    B_hz = float(config['channel']['B_hz'])
+    N = int(config['simulation']['N'])
+    Delta_f_hz = B_hz / N
+
+    # 估计sigma2_pn_base
+    f_vec = np.linspace(-B_hz / 2, B_hz / 2, N)
+    f_abs = np.abs(f_vec)
+
+    with np.errstate(divide='ignore', invalid='ignore'):
+        S_phi_c_k = S_phi_c_K2 / np.where(f_abs > 1e-6, f_abs ** 2, 1e12) + S_phi_c_K0
+
+    H_err_sq_k = f_abs ** 2 / (f_abs ** 2 + B_loop_hz ** 2)
+    S_phi_c_res_k = S_phi_c_k * H_err_sq_k
+    sigma2_pn_base = np.sum(S_phi_c_res_k) * Delta_f_hz
+
+    print(f"\n  Phase Noise Parameters:")
+    print(f"    σ²_PN base: {sigma2_pn_base:.4e} rad²")
+    print(f"    PN α-scaling: α^{pn_alpha_exp}")
+    print(f"\n  DSE Parameters:")
+    print(f"    C_DSE: {C_DSE:.4e}")
+    print(f"    DSE α-scaling: α^{dse_alpha_exp}")
+
+    # 计算每个alpha下的PN和DSE方差
+    sigma2_pn_vec = []
+    sigma2_dse_vec = []
+
+    for alpha in alpha_vec:
+        alpha_safe = max(alpha, 1e-10)
+
+        # PN方差随alpha的变化
+        sigma2_pn = sigma2_pn_base * (alpha_safe ** pn_alpha_exp)
+
+        # DSE方差随alpha的变化
+        sigma2_dse = C_DSE / (alpha_safe ** (-dse_alpha_exp))
+
+        sigma2_pn_vec.append(sigma2_pn)
+        sigma2_dse_vec.append(sigma2_dse)
+
+    sigma2_pn_vec = np.array(sigma2_pn_vec)
+    sigma2_dse_vec = np.array(sigma2_dse_vec)
+
+    # 找到交叉点
+    diff = np.abs(sigma2_pn_vec - sigma2_dse_vec)
+    crossover_idx = np.argmin(diff)
+    alpha_crossover = alpha_vec[crossover_idx]
+
+    print(f"\n  Crossover point: α* ≈ {alpha_crossover:.3f}")
+    print(f"    σ²_PN @ α*: {sigma2_pn_vec[crossover_idx]:.4e}")
+    print(f"    σ²_DSE @ α*: {sigma2_dse_vec[crossover_idx]:.4e}")
+
+    # 保存CSV数据
+    df = pd.DataFrame({
+        'alpha': alpha_vec,
+        'sigma2_pn_res': sigma2_pn_vec,
+        'sigma2_DSE': sigma2_dse_vec
+    })
+
+    csv_path = results_dir / 'pn_dse_crossover.csv'
+    df.to_csv(csv_path, index=False)
+    print(f"\n  ✓ CSV saved: {csv_path}")
+
+    # 生成图像
+    fig, ax = plt.subplots(figsize=(3.5, 2.625))
+
+    # PN曲线（无星星标记）
+    ax.semilogy(alpha_vec, sigma2_pn_vec,
+                color='#8B008B',  # 紫色
+                linewidth=2.0,
+                label='Phase Noise')
+
+    # DSE曲线（无星星标记）
+    ax.semilogy(alpha_vec, sigma2_dse_vec,
+                color='#FF8C00',  # 橙色
+                linewidth=2.0,
+                label='DSE')
+
+    # 标记交叉点
+    ax.plot(alpha_crossover, sigma2_pn_vec[crossover_idx],
+            'ro', markersize=8,
+            label=f'Crossover α*={alpha_crossover:.3f}',
+            zorder=5)
+
+    # 垂直线标记交叉点
+    ax.axvline(x=alpha_crossover, color='gray',
+               linestyle=':', linewidth=1.5, alpha=0.7)
+
+    # 标签
+    ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax.set_ylabel(r'Noise Variance (rad$^2$)', fontsize=8)
+
+    # 图例
+    ax.legend(loc='best', fontsize=7, framealpha=0.9)
+
+    # 网格
+    ax.grid(True, which='both', alpha=0.3, linewidth=0.5)
+
+    plt.tight_layout()
+
+    # 保存PNG和PDF
+    for ext in ['png', 'pdf']:
+        fig_path = output_dir / f'fig_pn_dse_crossover.{ext}'
+        plt.savefig(fig_path, dpi=300, bbox_inches='tight')
+        print(f"  ✓ Figure saved: {fig_path}")
+
+    plt.close()
+
+    print(f"\n  ✓ PN-DSE crossover analysis complete")
     return True
 
 
@@ -424,7 +586,7 @@ def main():
 
     # Generate figures
     success_count = 0
-    total_count = 3
+    total_count = 4
 
     try:
         if generate_figure_gamma_breakdown(config):
@@ -447,6 +609,14 @@ def main():
             success_count += 1
     except Exception as e:
         print(f"\n✗ Alpha policy RMSE failed: {e}")
+        import traceback
+        traceback.print_exc()
+
+    try:
+        if generate_figure_pn_dse_crossover(config):
+            success_count += 1
+    except Exception as e:
+        print(f"\n✗ PN-DSE crossover failed: {e}")
         import traceback
         traceback.print_exc()
 

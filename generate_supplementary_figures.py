@@ -284,7 +284,7 @@ def generate_figure_alpha_policy_rnet(config, output_dir='figures'):
             # Mark optimal point
             idx_max = np.argmax(data['R_net'])
             ax.plot(data['alpha'][idx_max], data['R_net'][idx_max],
-                    '*', markersize=12, color=color,
+                    markersize=12, color=color,
                     markeredgecolor='black', markeredgewidth=0.5)
 
     ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
@@ -362,7 +362,7 @@ def generate_figure_alpha_policy_rmse(config, output_dir='figures'):
             # Mark optimal point (minimum RMSE)
             idx_min = np.argmin(data['RMSE'])
             ax.plot(data['alpha'][idx_min], data['RMSE'][idx_min],
-                    '*', markersize=12, color=color,
+                     markersize=12, color=color,
                     markeredgecolor='black', markeredgewidth=0.5)
 
     ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)

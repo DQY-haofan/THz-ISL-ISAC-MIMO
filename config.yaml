@@ -67,7 +67,7 @@ isac_model:
   alpha_TTD: 0.01           # TTD threshold for beam squint
   L_TTD_db: 2.0             # TTD insertion loss
   C_PN: 0.0001               # Phase noise calibration constant
-  C_DSE: 0.000000005        # DSE base constant (会被自动校准覆盖)
+  C_DSE: 0.00000005        # DSE base constant (会被自动校准覆盖)
   SNR_p_db: 15.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
 
   # ISAC model mode
@@ -94,7 +94,7 @@ waveform:
 
 simulation:
   # ===== 专家建议: 增大N值以改善RMSE =====
-  N: 8192                  # 提升到16384 (从4096)
+  N: 65536                  # 提升到16384 (从4096)
   #
   # 内存和性能权衡:
   #   N=4096:   ~256 MB, RMSE基准
