@@ -153,7 +153,7 @@ def calc_BCRLB(
     # ===================================================================
     # G_grad_avg represents the gradient-side gain WITHOUT common phase noise loss
     # This ensures |s_k|² ∝ g_ar is preserved, enabling proper MIMO scaling
-    G_grad_avg = (g_sig_factors['eta_bsq_avg']
+    G_grad_avg = (g_sig_factors['g_ar'] *g_sig_factors['eta_bsq_avg']
                   * g_sig_factors['rho_Q'] * g_sig_factors['rho_APE']
                   * g_sig_factors['rho_A'])  # Note: NO rho_PN here
 
@@ -166,12 +166,10 @@ def calc_BCRLB(
     # ===================================================================
     # Signal scaling to achieve target SNR
     # ===================================================================
-    E_sig_target = P_sig_psd_target * T_obs
+    E_sig_target = P_sig_psd_target * T_obs* (B_hz * T_obs)
     E_sig_current = np.sum(np.abs(sig_amp_k) ** 2) * Delta_f_hz
     A = np.sqrt(E_sig_target / E_sig_current)
     s_k = A * sig_amp_k  # Scaled signal
-
-    # EXPERT FIX VERIFICATION:
     # - sig_amp_k ∝ √(g_ar) · η_k
     # - E_sig_current = Σ|sig_amp_k|² · Δf ∝ g_ar
     # - E_sig_target = SNR_p · N0 · G_grad_avg · T_obs ∝ g_ar (NEW!)
@@ -187,7 +185,7 @@ def calc_BCRLB(
     # Parseval energy conservation check
     if config.get('debug', {}).get('assert_parseval', False):
         E_freq = np.sum(np.abs(s_k) ** 2) * Delta_f_hz
-        E_time = P_sig_psd_target * T_obs
+        E_time = P_sig_psd_target * (B_hz * T_obs)
         rel_err = abs(E_freq - E_time) / max(E_time, np.finfo(float).eps)
         if rel_err > 1e-3:
             warnings.warn(f"Parseval energy mismatch: {rel_err:.3e}")

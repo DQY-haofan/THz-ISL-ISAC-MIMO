@@ -305,6 +305,16 @@ def generate_figure_alpha_policy_rnet(config, output_dir='figures'):
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"  ✓ Saved: {output_path.name}")
 
+    results_dir = Path('results')
+    results_dir.mkdir(parents=True, exist_ok=True)
+    for policy in ['CONST_POWER', 'CONST_ENERGY']:
+        df = pd.DataFrame({
+            'alpha': results[policy]['alpha'],
+            'R_net_bps_hz': results[policy]['R_net']
+        })
+        csv_path = results_dir / f'fig_ablation_{policy}_rnet.csv'
+        df.to_csv(csv_path, index=False)
+
     plt.close()
     return True
 

@@ -86,7 +86,8 @@ def calc_g_sig_factors(config: Dict[str, Any]) -> Dict[str, Union[float, np.ndar
     G_sig_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
 
     # ✅ Frequency-dependent signal amplitude (for sensing/FIM)
-    sig_amp_k = np.sqrt(g_ar) * eta_bsq_k
+    P_ref = config['isac_model'].get('P_ref', 1.0)
+    sig_amp_k = np.sqrt(P_ref * g_ar) * eta_bsq_k
 
     return {
         'g_ar': g_ar,
@@ -147,7 +148,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Component distortion coefficients (per element)
     Gamma_pa = gamma_pa_floor + (10 ** (papr_db / 10) / 10 ** (ibo_db / 10)) * 1e-3
     Gamma_adc = 1.0 / (3.0 * (2 ** (2 * gamma_adc_bits)))
-    Gamma_iq = 10 ** (abs(gamma_iq_irr_dbc) / 10.0)  # 不受输入正负号影响
+    Gamma_iq = 10 ** ((gamma_iq_irr_dbc) / 10.0)  # 不受输入正负号影响
     Gamma_lo = (2 * np.pi * f_c_hz * gamma_lo_jitter_s) ** 2
     Gamma_eff_per_element = Gamma_pa + Gamma_adc + Gamma_iq + Gamma_lo
 
@@ -230,10 +231,9 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
             else:
                 S_RSM_k = rsm_data.copy()
         except:
-            S_RSM_k = np.ones(N) * 1e-6
+            S_RSM_k = 0
     else:
-        S_RSM_k = np.ones(N) * 1e-6
-
+        S_RSM_k = 0
     # ===================================================================
     # Total noise PSD (frequency-dependent, for sensing)
     # ===================================================================
@@ -266,6 +266,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
         'Gamma_lo': Gamma_lo,
         'Delta_f_hz': Delta_f_hz,
         'sigma2_DSE': sigma2_DSE,
+        'sigma_2_DSE_var': sigma2_DSE,  # 兼容可视化脚本
         'sigma2_gamma': sigma2_gamma,  # Total distortion variance
         'N0': N0,  # ✅ White noise (for BCRLB)
         'N0_psd': N0_psd,
