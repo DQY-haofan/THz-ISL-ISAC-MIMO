@@ -68,11 +68,10 @@ isac_model:
   L_TTD_db: 2.0             # TTD insertion loss
   C_PN: 0.0001               # Phase noise calibration constant
   C_DSE: 0.00000005        # DSE base constant (会被自动校准覆盖)
-  SNR_p_db: 9.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
-  P_ref: 1.0      # 新增
+  SNR_p_db: 20.0            # Pilot SNR at α=1 (专家建议: 10-25 dB)
 
   # ISAC model mode
-  alpha_model: CONST_ENERGY # 恒功率模式
+  alpha_model: CONST_POWER # 恒功率模式
 
   # Phase noise scaling with alpha
   PN_alpha_mode: INVERSE    # σ²_ϕ,c,res ∝ 1/α (专家建议)
@@ -95,7 +94,7 @@ waveform:
 
 simulation:
   # ===== 专家建议: 增大N值以改善RMSE =====
-  N: 32768                  # 提升到16384 (从4096)
+  N: 65536                    # 提升到16384 (从4096)
   #
   # 内存和性能权衡:
   #   N=4096:   ~256 MB, RMSE基准

@@ -86,9 +86,10 @@ def calc_g_sig_factors(config: Dict[str, Any]) -> Dict[str, Union[float, np.ndar
     G_sig_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
 
     # ✅ Frequency-dependent signal amplitude (for sensing/FIM)
-    P_ref = config['isac_model'].get('P_ref', 1.0)
-    sig_amp_k = np.sqrt(P_ref * g_ar) * eta_bsq_k
-
+    # sig_amp_k = np.sqrt(g_ar) * eta_bsq_k  # 不乘P_ref
+    # ✅ 新代码：归一化为单位总能量
+    eta_bsq_k_squared_sum = np.sum(eta_bsq_k ** 2) * (B_hz / N)
+    sig_amp_k = np.sqrt(g_ar / eta_bsq_k_squared_sum) * eta_bsq_k
     return {
         'g_ar': g_ar,
         'eta_bsq_avg': eta_bsq_avg,
@@ -231,9 +232,9 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
             else:
                 S_RSM_k = rsm_data.copy()
         except:
-            S_RSM_k = 0
+            S_RSM_k = np.zeros(N, dtype=float)  # 不是标量0
     else:
-        S_RSM_k = 0
+        S_RSM_k = np.zeros(N, dtype=float)  # 不是标量0
     # ===================================================================
     # Total noise PSD (frequency-dependent, for sensing)
     # ===================================================================

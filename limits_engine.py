@@ -111,145 +111,146 @@ def calc_BCRLB(
         n_f_outputs: Dict[str, Union[float, np.ndarray]]
 ) -> Dict[str, Union[float, np.ndarray]]:
     """
-    Calculate Bayesian Cramer-Rao Lower Bound - MIMO SCALING FIXED
+    Calculate Bayesian Cramer-Rao Lower Bound - EXPERT FIXED VERSION
 
-    KEY FIX: Noise PSD now uses corrected hardware distortion that scales as (Nt+Nr).
-    This enables BCRLB to properly scale as 1/(Nt*Nr), giving RMSE ∝ 1/√(Nt*Nr).
+    KEY FIX: Properly scales signal energy and reconstructs noise PSD
+    without using stale values from physics_engine.
     """
 
-    N = config['simulation']['N']
-    B_hz = config['channel']['B_hz']
+    # ===================================================================
+    # STEP 1: 基础参数提取
+    # ===================================================================
+    N = int(config['simulation']['N'])
+    B_hz = float(config['channel']['B_hz'])
+    Nt = int(config['array']['Nt'])
+    Nr = int(config['array']['Nr'])
+
+    Delta_f_hz = B_hz / N
+    T_obs = N / B_hz
+
     FIM_MODE = config['simulation'].get('FIM_MODE', 'Whittle')
 
-    Delta_f_hz = n_f_outputs['Delta_f_hz']
-
     # ===================================================================
-    # ✅ CRITICAL: Use signal amplitude that includes √(g_ar)
+    # STEP 2: 计算目标SNR（考虑alpha策略）
     # ===================================================================
-    sig_amp_k = g_sig_factors['sig_amp_k']  # Already includes √(Nt*Nr)
-
-    # ===================================================================
-    # Signal power scaling (for pilot SNR)
-    # ===================================================================
-    # Use white noise as reference (independent of array size)
-    N0 = n_f_outputs['N0']
-
-    alpha = config['isac_model']['alpha']
+    alpha = float(config['isac_model']['alpha'])
     alpha_model = config['isac_model'].get('alpha_model', 'CONST_POWER')
-    base_SNRp_db = config['isac_model'].get('SNR_p_db', 20.0)
+    base_SNRp_db = float(config['isac_model'].get('SNR_p_db', 30.0))
 
     if alpha_model == 'CONST_POWER':
         SNR_p_db = base_SNRp_db
     elif alpha_model == 'CONST_ENERGY':
-        # 原：+ 10*log10(alpha)  ❌
-        SNR_p_db = base_SNRp_db - 10 * np.log10(max(alpha, np.finfo(float).eps))  # ✅
+        SNR_p_db = base_SNRp_db - 10 * np.log10(max(alpha, 1e-10))
     else:
         SNR_p_db = base_SNRp_db
 
-    SNR_p = 10.0 ** (SNR_p_db / 10.0)
+    SNR_p_lin = 10.0 ** (SNR_p_db / 10.0)
 
     # ===================================================================
-    # CRITICAL FIX: Scale target energy with array gain (gradient aperture)
+    # STEP 3: 计算梯度增益 G_grad_avg（必须包含g_ar）
     # ===================================================================
-    # G_grad_avg represents the gradient-side gain WITHOUT common phase noise loss
-    # This ensures |s_k|² ∝ g_ar is preserved, enabling proper MIMO scaling
-    G_grad_avg = (g_sig_factors['g_ar'] *g_sig_factors['eta_bsq_avg']
-                  * g_sig_factors['rho_Q'] * g_sig_factors['rho_APE']
-                  * g_sig_factors['rho_A'])  # Note: NO rho_PN here
+    g_ar = float(g_sig_factors['g_ar'])
+    eta_bsq_avg = float(g_sig_factors['eta_bsq_avg'])
+    rho_Q = float(g_sig_factors['rho_Q'])
+    rho_APE = float(g_sig_factors['rho_APE'])
+    rho_A = float(g_sig_factors['rho_A'])
 
-    # Target signal PSD (scaled with gradient aperture)
-    # Use thermal noise N0 as reference (NOT total noise) per expert guidance
-    P_sig_psd_target = SNR_p * N0 * G_grad_avg  # 含 eta_bsq_avg, rho_Q, rho_APE, rho_A；不含 rho_PN
-
-    T_obs = N / B_hz
+    G_grad_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
 
     # ===================================================================
-    # Signal scaling to achieve target SNR
+    # STEP 4: 信号能量归一化
     # ===================================================================
-    E_sig_target = P_sig_psd_target * T_obs* (B_hz * T_obs)
-    E_sig_current = np.sum(np.abs(sig_amp_k) ** 2) * Delta_f_hz
-    A = np.sqrt(E_sig_target / E_sig_current)
-    s_k = A * sig_amp_k  # Scaled signal
-    # - sig_amp_k ∝ √(g_ar) · η_k
-    # - E_sig_current = Σ|sig_amp_k|² · Δf ∝ g_ar
-    # - E_sig_target = SNR_p · N0 · G_grad_avg · T_obs ∝ g_ar (NEW!)
-    # - A = √(E_target/E_current) ∝ √(g_ar/g_ar) = constant (across array sizes)
-    # - |s_k|² = A² · |sig_amp_k|² ∝ g_ar (PRESERVED!)
-    #
-    # Therefore:
-    # - FIM ∝ |s_k|²/N_k ∝ g_ar / (Nt+Nr)
-    # - BCRLB ∝ 1/FIM ∝ (Nt+Nr) / g_ar = (Nt+Nr) / (Nt·Nr)
-    # - For square arrays (Nt=Nr=N): BCRLB ∝ 2/N²
-    # - RMSE ∝ √BCRLB ∝ 1/N ∝ 1/√(Nt·Nr) ✓ TARGET ACHIEVED
+    kB = 1.380649e-23
+    T0_K = float(config.get('channel', {}).get('T0_K', 290.0))
+    N0_white = float(n_f_outputs.get('N0', kB * T0_K))
 
-    # Parseval energy conservation check
+    P_sig_psd_target = SNR_p_lin * N0_white
+    E_sig_target = P_sig_psd_target * (B_hz * T_obs)
+
+    sig_amp_k = g_sig_factors['sig_amp_k']
+    E_sig_current = float(np.sum(np.abs(sig_amp_k) ** 2) * Delta_f_hz)
+
+    A = np.sqrt(max(E_sig_target, 1e-300) / max(E_sig_current, 1e-300))
+    s_k = A * sig_amp_k
+
+    # Parseval自检
     if config.get('debug', {}).get('assert_parseval', False):
-        E_freq = np.sum(np.abs(s_k) ** 2) * Delta_f_hz
-        E_time = P_sig_psd_target * (B_hz * T_obs)
-        rel_err = abs(E_freq - E_time) / max(E_time, np.finfo(float).eps)
+        E_actual = float(np.sum(np.abs(s_k) ** 2) * Delta_f_hz)
+        rel_err = abs(E_actual - E_sig_target) / max(E_sig_target, 1e-12)
         if rel_err > 1e-3:
-            warnings.warn(f"Parseval energy mismatch: {rel_err:.3e}")
+            warnings.warn(f"[Parseval] Error: {rel_err:.2e}")
 
     # ===================================================================
-    # Gradient calculations (for FIM)
+    # STEP 5: 重建失真功率（基于归一化后的信号）
+    # ===================================================================
+    E_actual = float(np.sum(np.abs(s_k) ** 2) * Delta_f_hz)
+    P_rx_target = E_actual / T_obs
+
+    G_sig_avg = float(g_sig_factors['G_sig_avg'])
+    P_tx_eff = P_rx_target / max(G_sig_avg, 1e-30)
+
+    Gamma_pa = float(n_f_outputs.get('Gamma_pa', 0.0))
+    Gamma_adc = float(n_f_outputs.get('Gamma_adc', 0.0))
+    Gamma_iq = float(n_f_outputs.get('Gamma_iq', 0.0))
+    Gamma_lo = float(n_f_outputs.get('Gamma_lo', 0.0))
+    Gamma_per_elem = Gamma_pa + Gamma_adc + Gamma_iq + Gamma_lo
+
+    # ⚠️ 关键：用新计算的失真功率
+    sigma2_gamma_new = Gamma_per_elem * P_tx_eff * (Nt + Nr)
+
+    # ===================================================================
+    # STEP 6: 重建总噪声PSD（一次性完成，不重复）
+    # ===================================================================
+    S_phi_c_res_k = np.asarray(n_f_outputs.get('S_phi_c_res_k', np.zeros(N)))
+    S_DSE_k = np.asarray(n_f_outputs.get('S_DSE_k', np.zeros(N)))
+    S_RSM_k = np.asarray(n_f_outputs.get('S_RSM_k', np.zeros(N)))
+
+    if S_RSM_k.size == 0:
+        S_RSM_k = np.zeros(N, dtype=float)
+
+    # ⚠️ 关键：用新计算的sigma2_gamma_new
+    N_k_psd = (N0_white +
+               sigma2_gamma_new / B_hz +  # 不是旧的n_f_outputs['sigma2_gamma']！
+               S_phi_c_res_k +
+               S_DSE_k +
+               S_RSM_k)
+    N_k_psd = np.maximum(N_k_psd, 1e-30)
+
+    # ===================================================================
+    # STEP 7: 梯度计算
     # ===================================================================
     f_vec = np.linspace(-B_hz / 2, B_hz / 2, N)
     ds_dtau_k = -1j * 2 * np.pi * f_vec * s_k
     ds_dfD_k = 1j * 2 * np.pi * T_obs * s_k
 
     # ===================================================================
-    # ✅ CRITICAL FIX: Reconstruct noise PSD with corrected distortion
-    # ===================================================================
-    # Extract individual noise components
-    N0_white = n_f_outputs['N0']  # Thermal noise (constant)
-    sigma2_gamma = n_f_outputs['sigma2_gamma']  # Now scales as (Nt+Nr), not g_ar!
-    S_RSM_k = n_f_outputs['S_RSM_k']
-    S_phi_c_res_k = n_f_outputs['S_phi_c_res_k']
-    S_DSE_k = n_f_outputs['S_DSE_k']
-
-    # Reconstruct noise PSD for BCRLB
-    # This is the corrected noise model where hardware distortion scales properly
-    N_k_psd = N0_white + sigma2_gamma / B_hz + S_RSM_k + S_phi_c_res_k + S_DSE_k
-    N_k_psd = np.maximum(N_k_psd, 1e-30)  # Prevent division by zero
-
-    # EXPERT-VERIFIED MIMO SCALING (after fix):
-    # Signal power: |s_k|² ∝ g_ar (PRESERVED by G_grad_avg scaling)
-    # Noise components:
-    #   - N0_white: constant (✓)
-    #   - sigma2_gamma/B: ∝ (Nt+Nr)/B (✓ hardware distortion)
-    #   - Other terms: independent of array size (✓)
-    #
-    # For large arrays where hardware dominates thermal noise:
-    #   SNR ∝ |s_k|² / N_k ∝ g_ar / (Nt+Nr) = Nt·Nr/(Nt+Nr)
-    #   For square arrays (Nt=Nr=N): SNR ∝ N²/2N = N/2
-    #   FIM ∝ SNR ∝ N (linear with array size!)
-    #   BCRLB ∝ 1/FIM ∝ 1/N
-    #   RMSE ∝ √BCRLB ∝ 1/√N ∝ 1/√(Nt·Nr) ✓
-    #
-    # Expected log-log slope: -0.5 (for square arrays)
-    # Previous (broken): +0.211 (signal was normalized away)
-    # Current (fixed): ~-0.5 (proper MIMO scaling)
-
-    # ===================================================================
-    # FIM computation
+    # STEP 8: FIM计算
     # ===================================================================
     if FIM_MODE == 'Whittle':
-        FIM, CRLB_matrix = _compute_whittle_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz)
-
+        FIM, CRLB_matrix = _compute_whittle_fim(
+            s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz
+        )
     elif FIM_MODE == 'Whittle-ExactDoppler':
         t_vec = np.linspace(-T_obs / 2, T_obs / 2, N)
         s_t = np.fft.ifft(np.fft.ifftshift(s_k)) * N
         ds_dfD_t = 1j * 2 * np.pi * t_vec * s_t
         ds_dfD_k_exact = np.fft.fftshift(np.fft.fft(ds_dfD_t)) / N
-        FIM, CRLB_matrix = _compute_whittle_fim(s_k, ds_dtau_k, ds_dfD_k_exact, N_k_psd, Delta_f_hz)
-
+        FIM, CRLB_matrix = _compute_whittle_fim(
+            s_k, ds_dtau_k, ds_dfD_k_exact, N_k_psd, Delta_f_hz
+        )
     elif FIM_MODE == 'Cholesky':
-        FIM, CRLB_matrix = _compute_cholesky_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, N, B_hz)
-
+        FIM, CRLB_matrix = _compute_cholesky_fim(
+            s_k, ds_dtau_k, ds_dfD_k, N_k_psd, N, B_hz
+        )
     else:
-        warnings.warn(f"Unknown FIM_MODE='{FIM_MODE}', falling back to Whittle")
-        FIM, CRLB_matrix = _compute_whittle_fim(s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz)
+        warnings.warn(f"Unknown FIM_MODE '{FIM_MODE}', using Whittle")
+        FIM, CRLB_matrix = _compute_whittle_fim(
+            s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz
+        )
 
+    # ===================================================================
+    # STEP 9: 提取BCRLB
+    # ===================================================================
     BCRLB_tau = max(CRLB_matrix[0, 0].real, np.finfo(float).eps)
     BCRLB_fD = max(CRLB_matrix[1, 1].real, np.finfo(float).eps)
 

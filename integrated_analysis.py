@@ -149,7 +149,7 @@ def run_pareto_sweep(config: Dict[str, Any]) -> pd.DataFrame:
 
             BCRLB_tau_safe = max(bcrlb_results['BCRLB_tau'], 1e-40)
             RMSE_tau_s = np.sqrt(BCRLB_tau_safe)
-            RMSE_range_m = (c_mps / 2.0) * RMSE_tau_s
+            RMSE_range_m = c_mps * RMSE_tau_s  # ISL单程：Δr = c·Δτ
             RMSE_fD_hz = np.sqrt(bcrlb_results['BCRLB_fD'])
 
             # Package results with noise breakdown
