@@ -214,7 +214,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
         alpha_star = float(dse_cfg.get('alpha_star', 0.05))
         sigma2_pn_base = sigma_2_phi_c_res / (alpha_safe ** pn_alpha_exp)
         sigma2_pn_star = sigma2_pn_base * (alpha_star ** pn_alpha_exp)
-        C_DSE_cfg = float(sigma2_pn_star) * (alpha_star ** 4)
+        C_DSE_cfg = float(sigma2_pn_star) * (alpha_star ** 5)
 
     # DSE variance and PSD
     sigma2_DSE = float(C_DSE_cfg) / (alpha_safe ** (-dse_alpha_exp))

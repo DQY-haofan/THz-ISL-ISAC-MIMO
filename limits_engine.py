@@ -164,7 +164,7 @@ def calc_BCRLB(
     T0_K = float(config.get('channel', {}).get('T0_K', 290.0))
     N0_white = float(n_f_outputs.get('N0', kB * T0_K))
 
-    P_sig_psd_target = SNR_p_lin * N0_white
+    P_sig_psd_target = SNR_p_lin * N0_white * G_grad_avg
     E_sig_target = P_sig_psd_target * (B_hz * T_obs)
 
     sig_amp_k = g_sig_factors['sig_amp_k']
@@ -251,7 +251,15 @@ def calc_BCRLB(
     # ===================================================================
     # STEP 9: 提取BCRLB
     # ===================================================================
-    BCRLB_tau = max(CRLB_matrix[0, 0].real, np.finfo(float).eps)
+    # 改为 Schur 补：
+    F_00, F_01, F_11 = FIM[0, 0], FIM[0, 1], FIM[1, 1]
+    eps_reg = 1e-9 * np.median([F_00, F_11])
+    BCRLB_tau = 1.0 / (F_00 - F_01 ** 2 / (F_11 + eps_reg))
+
+    # 兜底：
+    if not np.isfinite(BCRLB_tau) or BCRLB_tau <= 0:
+        from numpy.linalg import pinv
+        BCRLB_tau = max(pinv(FIM)[0, 0].real, 1e-30)
     BCRLB_fD = max(CRLB_matrix[1, 1].real, np.finfo(float).eps)
 
     return {
