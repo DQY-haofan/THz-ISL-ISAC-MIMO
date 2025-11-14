@@ -21,8 +21,8 @@ channel:
 
 hardware:
   # Power Amplifier (PA) distortion
-  gamma_pa_floor: 0.005     # State-of-art PA floor
-  papr_db: 7             # Low PAPR for constant envelope
+  gamma_pa_floor: 0.05     # State-of-art PA floor
+  papr_db: 12             # Low PAPR for constant envelope
   ibo_db: 3               # Input back-off
 
   # ADC quantization noise
@@ -72,7 +72,8 @@ isac_model:
 
   # ISAC model mode
   alpha_model: CONST_POWER # 恒功率模式
-
+  power_mode: FIXED        # 'FIXED' 或 'SNR_BASED'
+  P_tx_fixed: 0.00000001          # 固定发射功率（每个Tx单元，单位W）
   # Phase noise scaling with alpha
   PN_alpha_mode: INVERSE    # σ²_ϕ,c,res ∝ 1/α (专家建议)
 
@@ -136,6 +137,7 @@ debug:
   print_bcrlb_scaling: false
   print_dse_autotune: true
   print_hardware_ratio: true  #
+  force_awgn_test: false    # 临时测试
 
 # ====================================================================
 # 使用指南

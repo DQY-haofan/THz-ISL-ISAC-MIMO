@@ -21,8 +21,8 @@ import matplotlib.pyplot as plt
 
 # 导入你的引擎
 try:
-    from physics_engine import calc_g_sig_factors, calc_eta_bsq_factors
-    from limits_engine import calc_BCRLB, calc_n_f_vector
+    from physics_engine import calc_g_sig_factors, calc_n_f_vector
+    from limits_engine import calc_BCRLB
 except ImportError as e:
     print(f"❌ 无法导入引擎模块: {e}")
     print("请确保 physics_engine.py 和 limits_engine.py 在当前目录")
@@ -33,7 +33,7 @@ class HWDiagnostics:
     """硬件失真诊断工具类"""
 
     def __init__(self, config_path):
-        with open(config_path, 'r') as f:
+        with open(config_path, 'r', encoding='utf-8') as f:
             self.config = yaml.safe_load(f)
 
         # 固定 α = 0.1 用于诊断
@@ -105,59 +105,85 @@ class HWDiagnostics:
         return verdict_scaling, G_grad_amplitude, G_grad_power
 
     def diagnose_hardware_magnitude(self):
-        """第二层诊断：硬件失真量级"""
+        """第二层诊断：硬件失真量级（有效口径）"""
         print("\n" + "=" * 80)
-        print("【诊断层2】硬件失真量级：σ²_γ/N0 比值分析")
+        print("【诊断层2】硬件失真量级：σ²_γ/N0 比值分析（有效口径）")
         print("=" * 80)
 
         g_sig = calc_g_sig_factors(self.config)
         n_f = calc_n_f_vector(self.config, g_sig)
 
-        # 提取关键量
-        N0_white = n_f['N0_white']
-        sigma2_gamma_new = n_f.get('sigma2_gamma_new', n_f.get('sigma2_gamma', 0))
+        # === 用与limits_engine相同的方式计算有效失真 ===
+        N0_white = float(n_f['N0'])
+        B_hz = float(self.B_hz)
 
-        # 计算 PSD
-        gamma_psd = sigma2_gamma_new / self.B_hz
-        ratio_gamma2white = gamma_psd / N0_white
+        # 组装功率增益
+        eta_bsq_avg = float(g_sig['eta_bsq_avg'])
+        rho_Q = float(g_sig['rho_Q'])
+        rho_APE = float(g_sig['rho_APE'])
+        rho_A = float(g_sig['rho_A'])
+        g_ar = float(g_sig['g_ar'])
+        G_grad_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
+
+        # 计算目标功率（与limits_engine一致）
+        SNR_p_lin = self.SNR_p_lin
+        P_sig_psd_target = N0_white * SNR_p_lin * G_grad_avg
+        P_rx_target = P_sig_psd_target * B_hz
+
+        # 回推发射功率
+        G_sig_avg = float(g_sig.get('G_sig_avg', G_grad_avg))
+        P_tx_per_el_eff = P_rx_target / max(G_sig_avg, 1e-30)
+
+        # 计算有效失真功率
+        Gamma_eff_per_el = (
+                float(n_f.get('Gamma_pa', 0.0)) +
+                float(n_f.get('Gamma_adc', 0.0)) +
+                float(n_f.get('Gamma_iq', 0.0)) +
+                float(n_f.get('Gamma_lo', 0.0))
+        )
+        Nt = int(self.config['array']['Nt'])
+        Nr = int(self.config['array']['Nr'])
+
+        sigma2_gamma_eff = Gamma_eff_per_el * P_tx_per_el_eff * (Nt + Nr)
+        gamma_psd_eff = sigma2_gamma_eff / B_hz
+        ratio_gamma2white = gamma_psd_eff / N0_white
         ratio_db = 10 * np.log10(ratio_gamma2white) if ratio_gamma2white > 0 else -np.inf
 
         print(f"\n热噪声基线：")
-        print(f"  N0 = {N0_white:.3e} W/Hz")
-        print(f"  N0 = {10 * np.log10(N0_white * 1e3):.1f} dBm/Hz")
+        print(f"  N0 = {N0_white:.3e} W/Hz = {10 * np.log10(N0_white * 1e3):.1f} dBm/Hz")
 
-        print(f"\n硬件失真：")
-        print(f"  σ²_γ = {sigma2_gamma_new:.3e} W")
-        print(f"  σ²_γ/B = {gamma_psd:.3e} W/Hz")
+        print(f"\n有效发射功率（归一化后）：")
+        print(f"  P_tx_per_element_eff = {P_tx_per_el_eff:.3e} W")
+        print(f"  (这是能量归一化后回推的实际值)")
 
-        print(f"\n关键比值：")
-        print(f"  (σ²_γ/B) / N0 = {ratio_gamma2white:.6f}")
-        print(f"                = {ratio_db:.1f} dB")
+        print(f"\n有效硬件失真：")
+        print(f"  σ²_γ_eff = {sigma2_gamma_eff:.3e} W")
+        print(f"  σ²_γ_eff/B = {gamma_psd_eff:.3e} W/Hz")
+
+        print(f"\n关键比值（有效口径）：")
+        print(f"  (σ²_γ_eff/B) / N0 = {ratio_gamma2white:.6f}")
+        print(f"                    = {ratio_db:.1f} dB")
 
         # 判断
         print(f"\n" + "-" * 80)
         if ratio_db < -20:
             print(f"📊 硬件失真远小于热噪声 ({ratio_db:.1f} dB < -20 dB)")
             print(f"   结论：HW ≈ AWGN 是**合理的物理现象**")
-            print(f"   建议：如需在图上看到差异，需增强硬件失真参数")
             verdict_magnitude = "物理合理"
         elif -20 <= ratio_db < -10:
             print(f"📊 硬件失真略小于热噪声 ({ratio_db:.1f} dB)")
             print(f"   结论：HW 与 AWGN 差异应该微弱可见（~1-5%）")
-            print(f"   建议：使用相对劣化图（RMSE_hw/RMSE_awgn）放大差异")
             verdict_magnitude = "边界情况"
         elif -10 <= ratio_db < 0:
             print(f"📊 硬件失真接近热噪声 ({ratio_db:.1f} dB)")
             print(f"   结论：HW 与 AWGN 应有明显差异（~10-50%）")
-            print(f"   如果图上看不出，请检查 BCRLB 计算逻辑")
             verdict_magnitude = "应该可见"
         else:
             print(f"📊 硬件失真大于热噪声 ({ratio_db:.1f} dB)")
             print(f"   结论：HW 应显著劣于 AWGN")
-            print(f"   如果图上看不出，BCRLB 计算可能有严重错误")
             verdict_magnitude = "必须可见"
 
-        return verdict_magnitude, ratio_db, sigma2_gamma_new, N0_white
+        return verdict_magnitude, ratio_db, sigma2_gamma_eff, N0_white
 
     def diagnose_parameter_sensitivity(self):
         """第三层诊断：参数敏感性分析"""
@@ -236,7 +262,7 @@ class HWDiagnostics:
         bcrlb = calc_BCRLB(self.config, g_sig, n_f)
 
         # 提取中间量
-        N0 = n_f['N0_white']
+        N0 = n_f['N0']
         sigma2_gamma = n_f.get('sigma2_gamma_new', n_f.get('sigma2_gamma', 0))
 
         # 理论RMSE（AWGN基线）
@@ -360,7 +386,7 @@ class HWDiagnostics:
 
 def main():
     if len(sys.argv) < 2:
-        print("使用方法：python comprehensive_diagnosis.py config.yaml")
+        print("使用方法：python diagnosis.py config.yaml")
         sys.exit(1)
 
     config_path = sys.argv[1]

@@ -254,7 +254,7 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Return comprehensive noise characterization
     # ===================================================================
     return {
-        'N_k_psd': N_k_psd,
+        # 'N_k_psd': N_k_psd,
         'S_phi_c_res_k': S_phi_c_res_k,  # ✅ Added for BCRLB reconstruction
         'S_RSM_k': S_RSM_k,  # ✅ Added for BCRLB reconstruction
         'S_DSE_k': S_DSE_k,  # ✅ Added for BCRLB reconstruction

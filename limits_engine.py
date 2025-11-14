@@ -165,10 +165,46 @@ def calc_BCRLB(
     kB = 1.380649e-23
     T0_K = float(config.get('channel', {}).get('T0_K', 290.0))
     N0_white = float(n_f_outputs.get('N0', kB * T0_K))
+    G_sig_avg = float(g_sig_factors['G_sig_avg'])
 
-    P_sig_psd_target = SNR_p_lin * N0_white * G_grad_avg
-    E_sig_target = P_sig_psd_target * (B_hz * T_obs)
+    # ✅ 新方法：使用固定发射功率，不基于SNR
+    power_mode = config['isac_model'].get('power_mode', 'FIXED')  # 'FIXED' 或 'SNR_BASED'
 
+    if power_mode == 'FIXED':
+        # 固定功率模式（推荐）
+        P_tx_per_element = float(config['isac_model'].get('P_tx_fixed', 1.0))
+        P_rx_target = P_tx_per_element * G_sig_avg
+        E_sig_target = P_rx_target * T_obs
+
+        # 打印实际SNR（用于参考）
+        if config.get('debug', {}).get('print_hardware_ratio', False):
+            # 需要先估算N_k来计算实际SNR（这里先用N0估算）
+            SNR_rx_db_estimate = 10 * np.log10(P_rx_target / (N0_white * B_hz))
+            print(f"[Fixed Power] P_tx={P_tx_per_element:.3e} W/elem, "
+                  f"SNR_rx≈{SNR_rx_db_estimate:.1f} dB (基于N0估算)")
+
+    else:
+        # SNR-based模式（保留兼容性，但不推荐在PN主导时使用）
+        alpha = float(config['isac_model']['alpha'])
+        alpha_model = config['isac_model'].get('alpha_model', 'CONST_POWER')
+        base_SNRp_db = float(config['isac_model'].get('SNR_p_db', 30.0))
+
+        if alpha_model == 'CONST_POWER':
+            SNR_p_db = base_SNRp_db
+        elif alpha_model == 'CONST_ENERGY':
+            SNR_p_db = base_SNRp_db - 10 * np.log10(max(alpha, 1e-10))
+        else:
+            SNR_p_db = base_SNRp_db
+
+        SNR_p_lin = 10.0 ** (SNR_p_db / 10.0)
+        P_sig_psd_target = SNR_p_lin * N0_white * G_grad_avg
+        E_sig_target = P_sig_psd_target * (B_hz * T_obs)
+
+        # 回推发射功率（用于后续硬件失真计算）
+        P_rx_target = E_sig_target / T_obs
+        P_tx_per_element = P_rx_target / max(G_sig_avg, 1e-30)
+
+    # 归一化信号能量
     sig_amp_k = g_sig_factors['sig_amp_k']
     E_sig_current = float(np.sum(np.abs(sig_amp_k) ** 2) * Delta_f_hz)
 
@@ -185,11 +221,10 @@ def calc_BCRLB(
     # ===================================================================
     # STEP 5: 重建失真功率（基于归一化后的信号）
     # ===================================================================
-    E_actual = float(np.sum(np.abs(s_k) ** 2) * Delta_f_hz)
-    P_rx_target = E_actual / T_obs
+    # ✅ 简化：P_tx_per_element 已在STEP 4中确定，直接使用
+    P_tx_eff = P_tx_per_element  # 使用STEP 4计算的值
 
     G_sig_avg = float(g_sig_factors['G_sig_avg'])
-    P_tx_eff = P_rx_target / max(G_sig_avg, 1e-30)
 
     Gamma_pa = float(n_f_outputs.get('Gamma_pa', 0.0))
     Gamma_adc = float(n_f_outputs.get('Gamma_adc', 0.0))
@@ -197,7 +232,7 @@ def calc_BCRLB(
     Gamma_lo = float(n_f_outputs.get('Gamma_lo', 0.0))
     Gamma_per_elem = Gamma_pa + Gamma_adc + Gamma_iq + Gamma_lo
 
-    # ⚠️ 关键：用新计算的失真功率
+    # ✅ 用固定/确定的发射功率计算硬件失真
     sigma2_gamma_new = Gamma_per_elem * P_tx_eff * (Nt + Nr)
 
     gamma_psd = sigma2_gamma_new / B_hz
@@ -207,7 +242,15 @@ def calc_BCRLB(
         'gamma_psd': float(gamma_psd),
         'N0_psd': float(N0_white),
         'ratio_gamma_to_N0_dB': float(ratio_gamma_to_N0_dB),
+        'P_tx_per_element': float(P_tx_eff),  # ✅ 添加到诊断输出
     }
+    if config.get('debug', {}).get('print_hardware_ratio', False):
+        print(f"\n[Power Mode Verification]")
+        print(f"  Mode: {power_mode}")
+        print(f"  P_tx_per_element: {P_tx_eff:.3e} W")
+        print(f"  P_rx_total: {P_tx_eff * G_sig_avg:.3e} W")
+        print(f"  σ²_γ_eff: {sigma2_gamma_new:.3e} W")
+        print(f"  γ/N0: {ratio_gamma_to_N0_dB:.1f} dB")
 
     # ===================================================================
     # STEP 6: 重建总噪声PSD（一次性完成，不重复）
@@ -227,6 +270,10 @@ def calc_BCRLB(
                S_RSM_k)
     N_k_psd = np.maximum(N_k_psd, 1e-30)
 
+    # ⚠️ 临时测试：强制使用纯AWGN
+    if config.get('debug', {}).get('force_awgn_test', False):
+        print("[测试模式] 强制N_k_psd=N0（纯AWGN）")
+        N_k_psd = np.full(N, N0_white)
     # ===================================================================
     # STEP 7: 梯度计算
     # ===================================================================
@@ -234,9 +281,30 @@ def calc_BCRLB(
     ds_dtau_k = -1j * 2 * np.pi * f_vec * s_k
     ds_dfD_k = 1j * 2 * np.pi * T_obs * s_k
 
+    # ✅ 添加验证：打印N_k_psd的统计信息
+    if config.get('debug', {}).get('print_hardware_ratio', False):
+        N_k_mean = float(np.mean(N_k_psd))
+        N_k_min = float(np.min(N_k_psd))
+        N_k_max = float(np.max(N_k_psd))
+
+        print(f"[N_k_psd检查] 均值={N_k_mean:.3e} W/Hz")
+        print(f"[N_k_psd检查] 范围=[{N_k_min:.3e}, {N_k_max:.3e}] W/Hz")
+        print(f"[N_k_psd检查] 均值/N0={N_k_mean / N0_white:.1f}× ({10 * np.log10(N_k_mean / N0_white):.1f} dB)")
+
+        # 分解贡献
+        gamma_contrib = sigma2_gamma_new / B_hz
+        phi_contrib = float(np.mean(S_phi_c_res_k))
+        dse_contrib = float(np.mean(S_DSE_k))
+        rsm_contrib = float(np.mean(S_RSM_k))
+
+        print(f"[N_k组成] N0={N0_white:.3e}, γ={gamma_contrib:.3e}, PN={phi_contrib:.3e}, DSE={dse_contrib:.3e}")
+
     # ===================================================================
     # STEP 8: FIM计算
     # ===================================================================
+    print(f"[调用FIM前] N_k_psd均值={np.mean(N_k_psd):.3e} W/Hz")
+    print(f"[调用FIM前] id(N_k_psd)={id(N_k_psd)}")  # 内存地址
+
     if FIM_MODE == 'Whittle':
         FIM, CRLB_matrix = _compute_whittle_fim(
             s_k, ds_dtau_k, ds_dfD_k, N_k_psd, Delta_f_hz
@@ -273,6 +341,21 @@ def calc_BCRLB(
         BCRLB_tau = max(pinv(FIM)[0, 0].real, 1e-30)
     BCRLB_fD = max(CRLB_matrix[1, 1].real, np.finfo(float).eps)
 
+    # === 诊断日志：检查HW失真是否可见 ===
+    if config.get('debug', {}).get('print_hardware_ratio', False):
+        gamma_psd_eff = sigma2_gamma_new / B_hz
+        N0_white_diag = float(n_f_outputs.get('N0', 4.0e-21))  # 重命名避免覆盖
+        ratio_db = 10 * np.log10(gamma_psd_eff / N0_white_diag) if N0_white_diag > 0 else -np.inf
+
+        visibility = 'HIDDEN' if ratio_db < -20 else 'BORDERLINE' if ratio_db < -10 else 'VISIBLE'
+        print(f"[BCRLB-DIAG] HW/N0 ratio = {ratio_db:+.1f} dB ({visibility})")
+        print(f"[BCRLB-DIAG] σ²_γ_eff = {sigma2_gamma_new:.3e} W")
+        print(f"[BCRLB-DIAG] P_tx_eff = {P_tx_eff:.3e} W/element")  # ← 修改这里
+
+        # 添加验证
+        sigma2_check = Gamma_per_elem * P_tx_eff * (Nt + Nr)
+        print(f"[BCRLB-DIAG] σ²_γ验证 = {sigma2_check:.3e} W (应与上面相同)")
+
     return {
         'BCRLB_tau': BCRLB_tau,
         'BCRLB_fD': BCRLB_fD,
@@ -291,6 +374,17 @@ def _compute_whittle_fim(
         Delta_f_hz: float
 ) -> Tuple[np.ndarray, np.ndarray]:
     """Compute FIM using Whittle approximation - unchanged"""
+    # ✅ 验证噪声PSD
+    N_mean = float(np.mean(N_k_psd))
+    N_min = float(np.min(N_k_psd))
+    assert N_mean > 0, f"N_k_psd均值={N_mean}，应该>0"
+    assert N_min > 0, f"N_k_psd最小值={N_min}，应该>0"
+
+    # ✅ 强制验证：确认这是我们打印的那个N_k_psd
+    N_mean_inside_fim = float(np.mean(N_k_psd))
+    print(f"[FIM内部] N_k_psd均值={N_mean_inside_fim:.3e} W/Hz")
+    print(f"[FIM内部] N_k_psd首元素={N_k_psd[0]:.3e} W/Hz")
+
 
     eps = np.finfo(float).eps
     N_k_psd_safe = np.maximum(N_k_psd, eps)
@@ -401,6 +495,7 @@ def calc_MCRB(
     bcrlb_results = calc_BCRLB(config, g_sig_factors, n_f_outputs)
     F_matched = bcrlb_results['FIM']
     K = F_matched
+
 
     sig_amp_k = g_sig_factors['sig_amp_k']
     s_k = sig_amp_k  # Simplified for mismatch calculation
