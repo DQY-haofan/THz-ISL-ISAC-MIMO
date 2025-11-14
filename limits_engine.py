@@ -155,7 +155,9 @@ def calc_BCRLB(
     rho_APE = float(g_sig_factors['rho_APE'])
     rho_A = float(g_sig_factors['rho_A'])
 
-    G_grad_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
+    # G_grad_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
+
+    G_grad_avg = g_ar * rho_Q * rho_APE * rho_A * eta_bsq_avg # Amplitude gain
 
     # ===================================================================
     # STEP 4: 信号能量归一化
@@ -197,6 +199,15 @@ def calc_BCRLB(
 
     # ⚠️ 关键：用新计算的失真功率
     sigma2_gamma_new = Gamma_per_elem * P_tx_eff * (Nt + Nr)
+
+    gamma_psd = sigma2_gamma_new / B_hz
+    ratio_gamma_to_N0_dB = 10 * np.log10(gamma_psd / N0_white)
+
+    diagnostics = {
+        'gamma_psd': float(gamma_psd),
+        'N0_psd': float(N0_white),
+        'ratio_gamma_to_N0_dB': float(ratio_gamma_to_N0_dB),
+    }
 
     # ===================================================================
     # STEP 6: 重建总噪声PSD（一次性完成，不重复）
@@ -267,6 +278,7 @@ def calc_BCRLB(
         'BCRLB_fD': BCRLB_fD,
         'CRLB_matrix': CRLB_matrix,
         'FIM': FIM,
+        'diagnostics': diagnostics,  # ← 新增
         'Delta_f_hz': Delta_f_hz
     }
 

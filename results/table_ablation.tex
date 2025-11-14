@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\caption{Hardware Ablation Study Results at $\alpha = 0.10$}
+\label{tab:ablation}
+\begin{tabular}{lcccc}
+\toprule
+Configuration & RMSE (mm) & $\sigma^2_\gamma$ & $S_{PN}$ & $S_{DSE}$ \\
+\midrule
+AWGN-only & 0.000 & 0.00e+00 & 0.00e+00 & 0.00e+00 \\
+AWGN + HW & 0.000 & 1.22e-19 & 0.00e+00 & 0.00e+00 \\
+AWGN + HW + PN & 114023727520684720128.000 & 1.22e-19 & 3.72e+28 & 0.00e+00 \\
+AWGN + HW + PN + DSE & 114023727520684720128.000 & 1.22e-19 & 3.72e+28 & 0.00e+00 \\
+Full Model & 114023727520684720128.000 & 1.22e-19 & 3.72e+28 & 0.00e+00 \\
+\bottomrule
+\end{tabular}
+\end{table}

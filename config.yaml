@@ -22,8 +22,8 @@ channel:
 hardware:
   # Power Amplifier (PA) distortion
   gamma_pa_floor: 0.005     # State-of-art PA floor
-  papr_db: 0.1              # Low PAPR for constant envelope
-  ibo_db: 0.5               # Input back-off
+  papr_db: 7             # Low PAPR for constant envelope
+  ibo_db: 3               # Input back-off
 
   # ADC quantization noise
   gamma_adc_bits: 10        # 10-bit ENOB (realistic)
@@ -135,6 +135,7 @@ debug:
   assert_parseval: true     # ✓ 启用Parseval能量守恒检查
   print_bcrlb_scaling: false
   print_dse_autotune: true
+  print_hardware_ratio: true  #
 
 # ====================================================================
 # 使用指南

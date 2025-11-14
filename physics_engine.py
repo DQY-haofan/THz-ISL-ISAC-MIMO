@@ -83,7 +83,7 @@ def calc_g_sig_factors(config: Dict[str, Any]) -> Dict[str, Union[float, np.ndar
     rho_PN = np.exp(-sigma_rel_sq_rad2)
 
     # ✅ Combined signal gain (for communication)
-    G_sig_avg = g_ar * eta_bsq_avg * rho_Q * rho_APE * rho_A
+    G_sig_avg = g_ar * rho_Q * rho_APE * rho_A
 
     # ✅ Frequency-dependent signal amplitude (for sensing/FIM)
     # sig_amp_k = np.sqrt(g_ar) * eta_bsq_k  # 不乘P_ref
