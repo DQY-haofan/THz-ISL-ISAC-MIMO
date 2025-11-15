@@ -99,6 +99,147 @@ def setup_ieee_style():
     return colors
 
 
+def generate_mimo_combined_figure(results, colors, figures_dir):
+    """
+    生成 MIMO 性能合并图（双y轴）- 线条分离版本
+
+    改进：通过添加垂直偏移，让拟合线和理论线分离显示
+    """
+
+    print("\n  Generating combined MIMO performance figure (dual y-axis, separated lines)...")
+
+    # 提取数据
+    g_ar_arr = np.array(results['g_ar'])
+    snr_crit_arr = np.array(results['SNR_crit_db'])
+    rmse_arr = np.array(results['RMSE_m'])
+    Gamma_arr = np.array(results['Gamma_eff_total'])
+
+    # === 计算 SNR_crit 拟合 ===
+    log_NtNr = np.log10(g_ar_arr)
+    log_Gamma = np.log10(Gamma_arr)
+
+    slope_gamma, intercept_gamma, _, _, _ = linregress(log_NtNr, log_Gamma)
+    p_gamma = 2.0 * slope_gamma
+    expected_slope_snr = -(1.0 + 0.5 * p_gamma)
+
+    x_comm = 10 * np.log10(g_ar_arr)
+    y_comm = snr_crit_arr
+
+    slope_comm, intercept_comm, r_value_comm, _, std_err_comm = linregress(x_comm, y_comm)
+
+    # === 计算 RMSE 拟合 ===
+    log_g_ar = np.log10(g_ar_arr)
+    log_rmse = np.log10(rmse_arr)
+
+    slope_sense, intercept_sense, r_value_sense, _, std_err_sense = linregress(log_g_ar, log_rmse)
+
+    # === 创建双y轴图 ===
+    fig, ax1 = plt.subplots(figsize=(3.5, 2.625))
+
+    # ===== 左y轴：SNR_crit =====
+    color_snr = colors['blue']
+
+    ax1.set_xlabel('10*log10(Nt*Nr) [dB]', fontsize=8)
+    ax1.set_ylabel('SNR_crit [dB]', fontsize=8, color=color_snr)
+
+    x_fit = np.linspace(x_comm.min(), x_comm.max(), 100)
+
+    # ===== 方案1：调整理论线的截距（推荐）=====
+    # 让理论线在拟合线上方或下方偏移
+
+    # SNR 数据范围
+    snr_range = y_comm.max() - y_comm.min()
+    offset_snr = snr_range * 0.05  # 偏移 5% 的数据范围
+
+    # 拟合线（实际数据的拟合）
+    y_fit = intercept_comm + slope_comm * x_fit
+    ax1.plot(x_fit, y_fit, '-', linewidth=1.5, color=color_snr, alpha=0.7,
+             label=f'SNR fit (m={slope_comm:.2f})', zorder=1)
+
+    # 理论线（使用相同斜率，但截距偏移）
+    # 计算偏移后的截距，使理论线整体下移
+    intercept_theory_snr = intercept_comm - offset_snr
+    y_theory = intercept_theory_snr + expected_slope_snr * x_fit
+    ax1.plot(x_fit, y_theory, '--', linewidth=1.5, color='#77AC30', alpha=0.9,
+             label=f'SNR theory (m={expected_slope_snr:.2f})', zorder=2)
+
+    # 数据点（最后画，在顶层）
+    ax1.plot(x_comm, y_comm, 'o', markersize=5, linewidth=0,
+             label='SNR_crit (data)', color=color_snr,
+             markeredgecolor='black', markeredgewidth=0.5,
+             zorder=3)
+
+    ax1.tick_params(axis='y', labelcolor=color_snr, labelsize=8)
+    ax1.grid(True, alpha=0.3, linewidth=0.5)
+
+    # ===== 右y轴：RMSE =====
+    ax2 = ax1.twinx()
+    color_rmse = colors['orange']
+    ax2.set_ylabel('Range RMSE [mm, log]', fontsize=8, color=color_rmse)
+
+    # RMSE 数据范围（对数空间）
+    log_rmse_range = np.log10(rmse_arr.max()) - np.log10(rmse_arr.min())
+    offset_factor_rmse = 1.2  # 偏移因子（乘法），使理论线整体上移20%
+
+    g_ar_fit = 10 ** (x_fit / 10)
+
+    # RMSE 拟合线
+    rmse_fit = 10 ** (intercept_sense) * g_ar_fit ** (slope_sense)
+    ax2.semilogy(x_fit, rmse_fit * 1000, '-', linewidth=1.5,
+                 color=color_rmse, alpha=0.7,
+                 label=f'RMSE fit (m={slope_sense:.2f})', zorder=1)
+
+    # RMSE 理论线（使用相同斜率-0.5，但整体上移）
+    # 调整截距使线条上移
+    intercept_theory_rmse = intercept_sense + log_rmse_range * 0.15  # 对数空间偏移
+    rmse_theory = 10 ** (intercept_theory_rmse) * g_ar_fit ** (-0.5)
+    ax2.semilogy(x_fit, rmse_theory * 1000, '--', linewidth=1.5,
+                 color='#A2142F', alpha=0.9,
+                 label='RMSE theory (m=-0.5)', zorder=2)
+
+    # RMSE 数据点
+    ax2.semilogy(x_comm, rmse_arr * 1000, 's', markersize=5, linewidth=0,
+                 label='RMSE (data)', color=color_rmse,
+                 markeredgecolor='black', markeredgewidth=0.5,
+                 zorder=3)
+
+    ax2.tick_params(axis='y', labelcolor=color_rmse, labelsize=8)
+
+    # ===== 图例（紧凑型，两列）=====
+    lines1 = ax1.get_lines()
+    lines2 = ax2.get_lines()
+
+    labels1 = [l.get_label() for l in lines1]
+    labels2 = [l.get_label() for l in lines2]
+
+    all_lines = lines1 + lines2
+    all_labels = labels1 + labels2
+
+    ax1.legend(all_lines, all_labels, fontsize=6.5, loc='upper right',
+               ncol=2, framealpha=0.9, columnspacing=0.8,
+               handlelength=1.5, handletextpad=0.5)
+
+    # 添加性能指标文本框
+    textstr = f'R2: SNR={r_value_comm ** 2:.3f}, RMSE={r_value_sense ** 2:.3f}'
+    # ax1.text(0.02, 0.02, textstr,
+    #          transform=ax1.transAxes, fontsize=7,
+    #          verticalalignment='bottom',
+    #          bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.4, linewidth=0.5))
+
+    plt.tight_layout()
+
+    # 保存
+    for ext in ['png', 'pdf']:
+        output_path = figures_dir / f'fig_mimo_combined.{ext}'
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ Saved: {output_path}")
+
+    plt.close()
+
+    return True
+
+
+
 def verify_mimo_scaling(config_path='config.yaml'):
     """Verify MIMO scaling for both communication and sensing"""
 
@@ -326,57 +467,15 @@ def verify_mimo_scaling(config_path='config.yaml'):
     # ===================================================================
     # Generate IEEE-style figures (NO TITLES, single plots)
     # ===================================================================
-    print("\n" + "=" * 80)
+    print("\\n" + "=" * 80)
     print("GENERATING IEEE-STYLE FIGURES")
     print("=" * 80)
 
-    # Figure 1: SNR_crit vs 10log10(g_ar)
+    # Combined Figure: SNR_crit and RMSE (dual y-axis)
+    generate_mimo_combined_figure(results, colors, figures_dir)
+
+    # Figure 2: SNR ratio scaling（原 Figure 3，保持不变）
     fig, ax = plt.subplots()
-    ax.plot(x_comm, y_comm, 'o', markersize=4, linewidth=1.0,
-            label='Measured', color=colors['blue'],
-            markeredgecolor='black', markeredgewidth=0.3)
-    x_fit = np.linspace(x_comm.min(), x_comm.max(), 100)
-    y_fit = intercept_comm + slope_comm * x_fit
-    ax.plot(x_fit, y_fit, '--', linewidth=1.0, color=colors['red'],
-            label=f'Fit: slope={slope_comm:.3f}')
-    y_theory = intercept_comm + expected_slope * x_fit
-    ax.plot(x_fit, y_theory, ':', linewidth=1.5, color=colors['green'],
-            label=f'Theory: slope={expected_slope:.2f}')
-    ax.set_xlabel(r'$10\log_{10}(N_t N_r)$ (dB)', fontsize=8)
-    ax.set_ylabel(r'$\mathrm{SNR}_{\mathrm{crit}}$ (dB)', fontsize=8)
-    ax.legend(fontsize=8, loc='best')
-    ax.grid(True, alpha=0.3)
-    plt.tight_layout()
-
-    for ext in ['png', 'pdf']:
-        output_path = figures_dir / f'fig_mimo_snr_crit.{ext}'
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f"  ✓ Saved: {output_path}")
-    plt.close()
-
-    # Figure 2: RMSE vs g_ar (log-log)
-    fig, ax = plt.subplots()
-    ax.loglog(g_ar_arr, rmse_arr * 1000, 'o', markersize=4, linewidth=1.0,
-              label='Measured', color=colors['blue'],
-              markeredgecolor='black', markeredgewidth=0.3)
-    g_ar_fit = np.logspace(np.log10(g_ar_arr.min()), np.log10(g_ar_arr.max()), 100)
-    rmse_fit = 10 ** (intercept_sense) * g_ar_fit ** (slope_sense)
-    ax.loglog(g_ar_fit, rmse_fit, '--', linewidth=1.0, color=colors['red'],
-              label=f'Fit: slope={slope_sense:.3f}')
-    rmse_theory = 10 ** (intercept_sense) * g_ar_fit ** (-0.5)
-    ax.loglog(g_ar_fit, rmse_theory, ':', linewidth=1.5, color=colors['green'],
-              label='Theory: slope=-0.5')
-    ax.set_xlabel(r'$N_t N_r$', fontsize=8)
-    ax.set_ylabel(r'Range RMSE (mm)', fontsize=8)
-    ax.legend(fontsize=8, loc='best')
-    ax.grid(True, alpha=0.3, which='both')
-    plt.tight_layout()
-
-    for ext in ['png', 'pdf']:
-        output_path = figures_dir / f'fig_mimo_rmse.{ext}'
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f"  ✓ Saved: {output_path}")
-    plt.close()
 
     # Figure 3: SNR ratio scaling
     fig, ax = plt.subplots()

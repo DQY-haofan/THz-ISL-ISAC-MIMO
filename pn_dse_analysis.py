@@ -223,183 +223,161 @@ def generate_figure_gamma_breakdown(config, output_dir='figures'):
     return True
 
 
-def generate_figure_alpha_policy_rnet(config, output_dir='figures'):
+def generate_figure_alpha_policy_combined(config, output_dir='figures'):
     """
-    Alpha Policy Ablation - R_net Plot (Single Figure)
+    Alpha Policy Ablation - Combined R_net & RMSE (Dual Y-axis, Single Curve)
+
+    说明：
+    在 power_mode='FIXED' 和 SNR0_db_fixed 条件下，CONST_POWER 和 CONST_ENERGY
+    策略在数学上完全等价，因此只绘制一条曲线。
+
+    输出：
+    - 左y轴：Net Rate R_net (bits/s/Hz)
+    - 右y轴：Range RMSE (mm, log scale)
+    - 单条曲线，标记最优点
     """
     print("\n" + "=" * 80)
-    print("FIGURE: Alpha Policy - Communication Performance")
+    print("FIGURE: Alpha Policy - Combined Performance (Dual Y-axis)")
     print("=" * 80)
+    print("\n  Note: Under power_mode='FIXED' and SNR0_db_fixed,")
+    print("        CONST_POWER ≡ CONST_ENERGY (mathematically equivalent)")
+    print("        → Plotting single unified curve\n")
 
     alpha_vec = np.linspace(0.01, 0.50, 30)
 
     results = {
-        'CONST_POWER': {'R_net': [], 'alpha': []},
-        'CONST_ENERGY': {'R_net': [], 'alpha': []}
+        'alpha': [],
+        'R_net': [],
+        'RMSE': []
     }
 
-    for policy in ['CONST_POWER', 'CONST_ENERGY']:
-        print(f"\n[{policy}] Running alpha sweep...")
+    # 只使用一种策略（CONST_POWER），因为两者等价
+    policy = 'CONST_POWER'
+    print(f"[{policy}] Running alpha sweep...")
 
-        for i, alpha in enumerate(alpha_vec):
-            try:
-                cfg = copy.deepcopy(config)
-                cfg['isac_model']['alpha'] = alpha
-                cfg['isac_model']['alpha_model'] = policy
+    for i, alpha in enumerate(alpha_vec):
+        try:
+            cfg = copy.deepcopy(config)
+            cfg['isac_model']['alpha'] = alpha
+            cfg['isac_model']['alpha_model'] = policy
 
-                g_factors = calc_g_sig_factors(cfg)
-                n_outputs = calc_n_f_vector(cfg, g_factors)
+            # 导入必要的函数（需要确保这些函数可用）
+            from physics_engine import calc_g_sig_factors, calc_n_f_vector
+            from limits_engine import calc_C_J, calc_BCRLB
 
-                # 在读取 SNR0 固定值的位置加兜底
-                snr0_db_fixed = cfg['simulation'].get('SNR0_db_fixed')
-                if snr0_db_fixed is None:
-                    vec = cfg['simulation'].get('SNR0_db_vec', [0.0])
-                    snr0_db_fixed = float(vec[0])
+            g_factors = calc_g_sig_factors(cfg)
+            n_outputs = calc_n_f_vector(cfg, g_factors)
 
-                c_j_results = calc_C_J(cfg, g_factors, n_outputs, [snr0_db_fixed], compute_C_G=False)
+            # 计算 R_net
+            snr0_db_fixed = cfg['simulation'].get('SNR0_db_fixed')
+            if snr0_db_fixed is None:
+                vec = cfg['simulation'].get('SNR0_db_vec', [0.0])
+                snr0_db_fixed = float(vec[0])
 
-                # FIX: Use actual capacity at given SNR, not saturation capacity
-                R_net = (1 - alpha) * c_j_results['C_J_vec'][0]
+            c_j_results = calc_C_J(cfg, g_factors, n_outputs, [snr0_db_fixed], compute_C_G=False)
+            R_net = (1 - alpha) * c_j_results['C_J_vec'][0]
 
-                results[policy]['alpha'].append(alpha)
-                results[policy]['R_net'].append(R_net)
+            # 计算 RMSE
+            bcrlb_results = calc_BCRLB(cfg, g_factors, n_outputs)
+            RMSE = np.sqrt(bcrlb_results['BCRLB_tau']) * (cfg['channel']['c_mps'] / 2.0)
+            RMSE_mm = RMSE * 1000  # 转换为 mm
 
-                if (i + 1) % 10 == 0:
-                    print(f"  Progress: {i + 1}/{len(alpha_vec)}")
+            results['alpha'].append(alpha)
+            results['R_net'].append(R_net)
+            results['RMSE'].append(RMSE_mm)
 
-            except Exception as e:
-                print(f"  Warning: Failed at α={alpha:.3f}: {e}")
-                continue
+            if (i + 1) % 10 == 0:
+                print(f"  Progress: {i + 1}/{len(alpha_vec)}")
 
-    # Create figure
-    fig, ax = plt.subplots(figsize=(3.5, 2.625))
+        except Exception as e:
+            print(f"  Warning: Failed at α={alpha:.3f}: {e}")
+            continue
 
-    for policy, color, marker in [('CONST_POWER', '#0072BD', 'o'),
-                                  ('CONST_ENERGY', '#D95319', 's')]:
-        data = results[policy]
-        if len(data['alpha']) > 0:
-            ax.plot(data['alpha'], data['R_net'], marker=marker, markersize=4,
-                    linewidth=1.0, label=policy, color=color, alpha=0.8,
-                    markevery=3)
+    if len(results['alpha']) == 0:
+        print("  ✗ No valid results, skipping figure generation")
+        return False
 
-            # Mark optimal point
-            idx_max = np.argmax(data['R_net'])
-            ax.plot(data['alpha'][idx_max], data['R_net'][idx_max],
-                    markersize=12, color=color,
-                    markeredgecolor='black', markeredgewidth=0.5)
+    # 创建双y轴图
+    fig, ax1 = plt.subplots(figsize=(3.5, 2.625))
 
-    ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
-    ax.set_ylabel(r'Net Rate $R_{\mathrm{net}}$ (bits/s/Hz)', fontsize=8)
-    ax.legend(fontsize=8, loc='best', framealpha=0.9)
-    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
-    ax.set_xlim([0, 0.5])
+    # 左轴：R_net (蓝色)
+    color_rnet = '#0072BD'
+    ax1.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
+    ax1.set_ylabel(r'Net Rate $R_{\mathrm{net}}$ (bits/s/Hz)', fontsize=8, color=color_rnet)
+
+    line1 = ax1.plot(results['alpha'], results['R_net'],
+                     color=color_rnet, linewidth=1.5, marker='o', markersize=4,
+                     markevery=3, alpha=0.8, label='Net Rate')
+
+    # 标记 R_net 最优点（最大值）
+    idx_max_rnet = np.argmax(results['R_net'])
+    ax1.plot(results['alpha'][idx_max_rnet], results['R_net'][idx_max_rnet],
+              markersize=10, color=color_rnet,
+             markeredgecolor='black', markeredgewidth=1.0, zorder=5)
+
+    ax1.tick_params(axis='y', labelcolor=color_rnet, labelsize=8)
+    ax1.set_xlim([0, 0.5])
+    ax1.grid(True, alpha=0.3, linestyle='--', linewidth=0.5)
+
+    # 右轴：RMSE (橙红色，log scale)
+    ax2 = ax1.twinx()
+    color_rmse = '#D95319'
+    ax2.set_ylabel(r'Range RMSE (mm, log scale)', fontsize=8, color=color_rmse)
+
+    line2 = ax2.semilogy(results['alpha'], results['RMSE'],
+                         color=color_rmse, linewidth=1.5, marker='s', markersize=4,
+                         markevery=3, alpha=0.8, label='RMSE')
+
+    # 标记 RMSE 最优点（最小值）
+    idx_min_rmse = np.argmin(results['RMSE'])
+    ax2.semilogy(results['alpha'][idx_min_rmse], results['RMSE'][idx_min_rmse],
+                  markersize=10, color=color_rmse,
+                 markeredgecolor='black', markeredgewidth=1.0, zorder=5)
+
+    ax2.tick_params(axis='y', labelcolor=color_rmse, labelsize=8)
+
+    # 合并图例（放在最佳位置）
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, fontsize=8, loc='upper right', framealpha=0.9)
+
+    # # 添加说明文字
+    # ax1.text(0.02, 0.02,
+    #          'Note: CONST_POWER ≡ CONST_ENERGY\nunder FIXED power mode',
+    #          transform=ax1.transAxes,
+    #          fontsize=6, verticalalignment='bottom',
+    #          bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
 
     plt.tight_layout()
 
-    # Save
+    # 保存图像
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     for ext in ['png', 'pdf']:
-        output_path = output_dir / f'fig_ablation_alpha_rnet.{ext}'
+        output_path = output_dir / f'fig_ablation_alpha_combined.{ext}'
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"  ✓ Saved: {output_path.name}")
 
+    # 保存数据
     results_dir = Path('results')
     results_dir.mkdir(parents=True, exist_ok=True)
-    for policy in ['CONST_POWER', 'CONST_ENERGY']:
-        df = pd.DataFrame({
-            'alpha': results[policy]['alpha'],
-            'R_net_bps_hz': results[policy]['R_net']
-        })
-        csv_path = results_dir / f'fig_ablation_{policy}_rnet.csv'
-        df.to_csv(csv_path, index=False)
 
-    plt.close()
-    return True
+    df = pd.DataFrame({
+        'alpha': results['alpha'],
+        'R_net_bps_hz': results['R_net'],
+        'RMSE_mm': results['RMSE']
+    })
+    csv_path = results_dir / 'fig_ablation_alpha_combined.csv'
+    df.to_csv(csv_path, index=False)
+    print(f"  ✓ Data saved: {csv_path.name}")
 
-
-def generate_figure_alpha_policy_rmse(config, output_dir='figures'):
-    """
-    Alpha Policy Ablation - RMSE Plot (Single Figure)
-    """
-    print("\n" + "=" * 80)
-    print("FIGURE: Alpha Policy - Sensing Performance")
-    print("=" * 80)
-
-    alpha_vec = np.linspace(0.01, 0.50, 30)
-
-    results = {
-        'CONST_POWER': {'RMSE': [], 'alpha': []},
-        'CONST_ENERGY': {'RMSE': [], 'alpha': []}
-    }
-
-    for policy in ['CONST_POWER', 'CONST_ENERGY']:
-        print(f"\n[{policy}] Running alpha sweep...")
-
-        for i, alpha in enumerate(alpha_vec):
-            try:
-                cfg = copy.deepcopy(config)
-                cfg['isac_model']['alpha'] = alpha
-                cfg['isac_model']['alpha_model'] = policy
-
-                g_factors = calc_g_sig_factors(cfg)
-                n_outputs = calc_n_f_vector(cfg, g_factors)
-
-                bcrlb_results = calc_BCRLB(cfg, g_factors, n_outputs)
-                RMSE = np.sqrt(bcrlb_results['BCRLB_tau']) * (cfg['channel']['c_mps'] / 2.0)
-
-                results[policy]['alpha'].append(alpha)
-                results[policy]['RMSE'].append(RMSE * 1000)  # to mm
-
-                if (i + 1) % 10 == 0:
-                    print(f"  Progress: {i + 1}/{len(alpha_vec)}")
-
-            except Exception as e:
-                print(f"  Warning: Failed at α={alpha:.3f}: {e}")
-                continue
-
-    # Create figure
-    fig, ax = plt.subplots(figsize=(3.5, 2.625))
-
-    for policy, color, marker in [('CONST_POWER', '#0072BD', 'o'),
-                                  ('CONST_ENERGY', '#D95319', 's')]:
-        data = results[policy]
-        if len(data['alpha']) > 0:
-            ax.semilogy(data['alpha'], data['RMSE'], marker=marker, markersize=4,
-                        linewidth=1.0, label=policy, color=color, alpha=0.8,
-                        markevery=3)
-
-            # Mark optimal point (minimum RMSE)
-            idx_min = np.argmin(data['RMSE'])
-            ax.plot(data['alpha'][idx_min], data['RMSE'][idx_min],
-                     markersize=12, color=color,
-                    markeredgecolor='black', markeredgewidth=0.5)
-
-    ax.set_xlabel(r'ISAC Overhead ($\alpha$)', fontsize=8)
-    ax.set_ylabel(r'Range RMSE (mm, log scale)', fontsize=8)
-    ax.legend(fontsize=8, loc='best', framealpha=0.9)
-    ax.grid(True, alpha=0.3, linestyle='--', linewidth=0.5, which='both')
-    ax.set_xlim([0, 0.5])
-
-    plt.tight_layout()
-
-    # Save
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    for ext in ['png', 'pdf']:
-        output_path = output_dir / f'fig_ablation_alpha_rmse.{ext}'
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f"  ✓ Saved: {output_path.name}")
-
-    # Save data
-    results_dir = Path('results')
-    results_dir.mkdir(parents=True, exist_ok=True)
-    for policy in ['CONST_POWER', 'CONST_ENERGY']:
-        df = pd.DataFrame(results[policy])
-        csv_path = results_dir / f'fig_ablation_{policy}_data.csv'
-        df.to_csv(csv_path, index=False)
+    # 输出最优点信息
+    print(f"\n  Optimal Points:")
+    print(f"    R_net maximum: α = {results['alpha'][idx_max_rnet]:.3f}, "
+          f"R_net = {results['R_net'][idx_max_rnet]:.4f} bits/s/Hz")
+    print(f"    RMSE minimum:  α = {results['alpha'][idx_min_rmse]:.3f}, "
+          f"RMSE = {results['RMSE'][idx_min_rmse]:.4f} mm")
 
     plt.close()
     return True
@@ -607,21 +585,12 @@ def main():
         traceback.print_exc()
 
     try:
-        if generate_figure_alpha_policy_rnet(config):
+        if generate_figure_alpha_policy_combined(config):
             success_count += 1
     except Exception as e:
-        print(f"\n✗ Alpha policy R_net failed: {e}")
+        print(f"\n✗ Alpha policy combined failed: {e}")
         import traceback
         traceback.print_exc()
-
-    try:
-        if generate_figure_alpha_policy_rmse(config):
-            success_count += 1
-    except Exception as e:
-        print(f"\n✗ Alpha policy RMSE failed: {e}")
-        import traceback
-        traceback.print_exc()
-
     try:
         if generate_figure_pn_dse_crossover(config):
             success_count += 1

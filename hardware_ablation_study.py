@@ -395,13 +395,7 @@ def plot_ablation(df: pd.DataFrame, output_dir: Path, rmse_theory: float = None)
             'label': 'AWGN + HW + PN + DSE',
             'zorder': 2,
         },
-        'Full': {
-            'color': '#A2142F',
-            'linestyle': '-',
-            'marker': 'd',
-            'label': 'Full Model',
-            'zorder': 1,
-        },
+
     }
 
     for cfg_name, style in styles.items():
@@ -421,10 +415,10 @@ def plot_ablation(df: pd.DataFrame, output_dir: Path, rmse_theory: float = None)
                         alpha=0.9,
                         zorder=style['zorder'])
 
-    # 添加理论基线（如果提供）
-    if rmse_theory is not None:
-        ax.axhline(y=rmse_theory, color='gray', linestyle=':',
-                   linewidth=1.0, alpha=0.5, label='Theory (rect. window)')
+    # # 添加理论基线（如果提供）
+    # if rmse_theory is not None:
+    #     ax.axhline(y=rmse_theory, color='gray', linestyle=':',
+    #                linewidth=1.0, alpha=0.5, label='Theory (rect. window)')
 
     ax.set_xlabel(r'ISAC Overhead $\alpha$')
     ax.set_ylabel('Range RMSE (mm, log scale)')

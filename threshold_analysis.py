@@ -348,6 +348,126 @@ def run_threshold_sweep(config_path: str, grid_size: int = 10, mode: str = 'fast
     }
 
 
+def generate_threshold_slices_combined(df, B_over_fc, Lap_over_lambda, output_dir='figures'):
+    """
+    生成 Threshold 误差切片合并图 - 修复版
+
+    修复：
+    1. 移除错误的续行符 / \ \
+    2. 移除数学表达式中的 $ 符号
+    """
+
+    print(f"  Generating combined threshold slices...")
+
+    fig, ax = plt.subplots(figsize=(3.5, 2.625))
+
+    # 固定 L_ap/λ，变化 B/f_c
+    mid_Lap_idx = len(Lap_over_lambda) // 2
+    mid_Lap = Lap_over_lambda[mid_Lap_idx]
+    slice_data_1 = df[df['Lap_over_lambda'] == mid_Lap]
+
+    # 固定 B/f_c，变化 L_ap/λ
+    mid_B_idx = len(B_over_fc) // 2
+    mid_B = B_over_fc[mid_B_idx]
+    slice_data_2 = df[df['B_over_fc'] == mid_B]
+
+    # 修复：归一化到 [0, 1] - 正确的写法（无需续行符）
+    x1_norm = (slice_data_1['B_over_fc'] - slice_data_1['B_over_fc'].min()) / (
+                slice_data_1['B_over_fc'].max() - slice_data_1['B_over_fc'].min())
+    y1 = slice_data_1['relative_error'] * 100
+
+    x2_norm = (slice_data_2['Lap_over_lambda'] - slice_data_2['Lap_over_lambda'].min()) / (
+                slice_data_2['Lap_over_lambda'].max() - slice_data_2['Lap_over_lambda'].min())
+    y2 = slice_data_2['relative_error'] * 100
+
+    # 绘制两条曲线
+    ax.plot(x1_norm, y1, 'o-', linewidth=1.0, markersize=4,
+            color='#0072BD', label=f'Vary B/fc (fixed Lap/lambda={mid_Lap:.1f})',
+            markeredgecolor='black', markeredgewidth=0.3)
+
+    ax.plot(x2_norm, y2, 's-', linewidth=1.0, markersize=4,
+            color='#D95319', label=f'Vary Lap/lambda (fixed B/fc={mid_B:.3f})',
+            markeredgecolor='black', markeredgewidth=0.3)
+
+    # 修复：移除数学表达式的 $ 符号
+    ax.set_xlabel('Normalized Parameter Value', fontsize=8)
+    ax.set_ylabel('Relative Error [%]', fontsize=8)
+    ax.legend(fontsize=7, loc='best', framealpha=0.9)
+    ax.grid(True, alpha=0.3, linewidth=0.5)
+
+    plt.tight_layout()
+
+    for ext in ['png', 'pdf']:
+        output_path = Path(output_dir) / f'threshold_error_slices_combined.{ext}'
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ Saved: {output_path}")
+
+    plt.close()
+
+    return True
+
+
+def generate_threshold_slices_dual_xaxis(df, B_over_fc, Lap_over_lambda, output_dir='figures'):
+    """
+    生成 Threshold 误差切片图 - 双x轴版本（修复版）
+
+    修复：移除数学表达式中的 $ 符号
+    """
+
+    print(f"  Generating dual x-axis threshold slices...")
+
+    fig, ax1 = plt.subplots(figsize=(3.5, 2.625))
+
+    # 固定 L_ap/λ，变化 B/f_c
+    mid_Lap_idx = len(Lap_over_lambda) // 2
+    mid_Lap = Lap_over_lambda[mid_Lap_idx]
+    slice_data_1 = df[df['Lap_over_lambda'] == mid_Lap]
+
+    # === 主x轴：B/f_c ===
+    color1 = '#0072BD'
+    ax1.set_xlabel('B/fc', fontsize=8, color=color1)
+    ax1.set_ylabel('Relative Error [%]', fontsize=8)
+
+    line1 = ax1.plot(slice_data_1['B_over_fc'], slice_data_1['relative_error'] * 100,
+                     'o-', linewidth=1.0, markersize=4, color=color1,
+                     label=f'Lap/lambda={mid_Lap:.1f} (fixed)',
+                     markeredgecolor='black', markeredgewidth=0.3)
+
+    ax1.tick_params(axis='x', labelcolor=color1, labelsize=8)
+    ax1.grid(True, alpha=0.3, linewidth=0.5)
+
+    # === 副x轴：L_ap/λ ===
+    mid_B_idx = len(B_over_fc) // 2
+    mid_B = B_over_fc[mid_B_idx]
+    slice_data_2 = df[df['B_over_fc'] == mid_B]
+
+    ax2 = ax1.twiny()
+    color2 = '#D95319'
+    ax2.set_xlabel('Lap/lambda', fontsize=8, color=color2)
+
+    line2 = ax2.plot(slice_data_2['Lap_over_lambda'], slice_data_2['relative_error'] * 100,
+                     's-', linewidth=1.0, markersize=4, color=color2,
+                     label=f'B/fc={mid_B:.3f} (fixed)',
+                     markeredgecolor='black', markeredgewidth=0.3)
+
+    ax2.tick_params(axis='x', labelcolor=color2, labelsize=8)
+
+    # 合并图例
+    lines = line1 + line2
+    labels = [l.get_label() for l in lines]
+    ax1.legend(lines, labels, fontsize=7, loc='best', framealpha=0.9)
+
+    plt.tight_layout()
+
+    for ext in ['png', 'pdf']:
+        output_path = Path(output_dir) / f'threshold_error_slices_dual_xaxis.{ext}'
+        plt.savefig(output_path, dpi=300, bbox_inches='tight')
+        print(f"    ✓ Saved: {output_path}")
+
+    plt.close()
+
+    return True
+
 def visualize_threshold_results(data_source, output_dir='figures'):
     """
     可视化threshold数据（完整套件）
@@ -497,48 +617,10 @@ def visualize_threshold_results(data_source, output_dir='figures'):
     plt.close()
 
     # ===== Figure 3: 1D Slices =====
-    print(f"  Generating 1D slice plots...")
 
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(7.0, 2.625))  # IEEE double column
+    print(f"  Generating combined 1D slice plot...")
 
-    # 固定Lap_over_lambda，变化B_over_fc
-    mid_Lap_idx = len(Lap_over_lambda) // 2
-    mid_Lap = Lap_over_lambda[mid_Lap_idx]
-    slice_data = df[df['Lap_over_lambda'] == mid_Lap]
-
-    ax1.plot(slice_data['B_over_fc'], slice_data['relative_error'] * 100,
-             'o-', linewidth=1.0, markersize=4, color='#0072BD')
-    ax1.set_xlabel(r'$B/f_c$', fontsize=8)
-    ax1.set_ylabel('Relative Error (%)', fontsize=8)
-    # NO TITLE - use text annotation instead
-    ax1.text(0.05, 0.95, f'$L_{{\\mathrm{{ap}}}}/\\lambda={mid_Lap:.1f}$',
-             transform=ax1.transAxes, fontsize=8, verticalalignment='top',
-             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, linewidth=0.5))
-    ax1.grid(True, alpha=0.3, linewidth=0.5)
-
-    # 固定B_over_fc，变化Lap_over_lambda
-    mid_B_idx = len(B_over_fc) // 2
-    mid_B = B_over_fc[mid_B_idx]
-    slice_data = df[df['B_over_fc'] == mid_B]
-
-    ax2.plot(slice_data['Lap_over_lambda'], slice_data['relative_error'] * 100,
-             's-', linewidth=1.0, markersize=4, color='#D95319')
-    ax2.set_xlabel(r'$L_{\mathrm{ap}}/\lambda$', fontsize=8)
-    ax2.set_ylabel('Relative Error (%)', fontsize=8)
-    # NO TITLE - use text annotation instead
-    ax2.text(0.05, 0.95, f'$B/f_c={mid_B:.3f}$',
-             transform=ax2.transAxes, fontsize=8, verticalalignment='top',
-             bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8, linewidth=0.5))
-    ax2.grid(True, alpha=0.3, linewidth=0.5)
-
-    plt.tight_layout()
-
-    for ext in ['png', 'pdf']:
-        output_path = os.path.join(output_dir, f'threshold_error_slices.{ext}')
-        plt.savefig(output_path, dpi=300, bbox_inches='tight')
-        print(f"  ✓ Saved: {output_path}")
-
-    plt.close()
+    generate_threshold_slices_combined(df, B_over_fc, Lap_over_lambda, output_dir)
 
     # ===== Summary =====
     print(f"\n[4/4] Visualization complete!")

@@ -21,21 +21,21 @@ channel:
 
 hardware:
   # Power Amplifier (PA) distortion
-  gamma_pa_floor: 0.05     # State-of-art PA floor
-  papr_db: 12             # Low PAPR for constant envelope
+  gamma_pa_floor: 0.15     # State-of-art PA floor
+  papr_db: 15             # Low PAPR for constant envelope
   ibo_db: 3               # Input back-off
 
   # ADC quantization noise
-  gamma_adc_bits: 10        # 10-bit ENOB (realistic)
+  gamma_adc_bits: 7        # 10-bit ENOB (realistic)
 
   # I/Q imbalance
-  gamma_iq_irr_dbc: -30.0   # -30 dBc IRR
+  gamma_iq_irr_dbc: -20.0   # -30 dBc IRR
 
   # LO phase noise/jitter
-  gamma_lo_jitter_s: 0.00000000000002  # 20 fs RMS jitter
+  gamma_lo_jitter_s: 0.00000000000012  # 20 fs RMS jitter
 
   # Phase quantization
-  rho_q_bits: 4             # 4-bit phase shifter
+  rho_q_bits: 3             # 4-bit phase shifter
 
   # Amplitude errors
   rho_a_error_rms: 0.02     # 2% RMS amplitude error
@@ -73,7 +73,8 @@ isac_model:
   # ISAC model mode
   alpha_model: CONST_POWER # 恒功率模式
   power_mode: FIXED        # 'FIXED' 或 'SNR_BASED'
-  P_tx_fixed: 0.00000001          # 固定发射功率（每个Tx单元，单位W）
+  P_tx_fixed: 0.00001          # 固定发射功率（每个Tx单元，单位W）\
+  P_tx: 0.00001
   # Phase noise scaling with alpha
   PN_alpha_mode: INVERSE    # σ²_ϕ,c,res ∝ 1/α (专家建议)
 
