@@ -395,33 +395,55 @@ def setup_ieee_style():
 
 
 def plot_capacity_vs_snr(df_snr: pd.DataFrame, output_dir: Path, colors: dict):
-    """Generate Capacity vs SNR figure"""
+    """
+    Generate Capacity vs SNR figure with Jensen gap on right axis
+    (FIXED VERSION with normalized capacity option)
+    """
     print("\n  [Fig 1] Capacity vs SNR...")
 
-    fig, ax = plt.subplots()
+    # === 主图：绝对容量 ===
+    fig, ax1 = plt.subplots()
 
     C_sat = df_snr['C_sat'].iloc[0]
     SNR_crit_db = df_snr['SNR_crit_db'].iloc[0]
 
-    ax.plot(df_snr['SNR0_db'], df_snr['C_J_bps_hz'],
-            label=r'$C_J$', color=colors['blue'],
-            linewidth=1.0, marker='o', markersize=3, markevery=4)
+    # 左轴：容量（bits/s/Hz）
+    line1 = ax1.plot(df_snr['SNR0_db'], df_snr['C_J_bps_hz'],
+                     label=r'$C_J$', color=colors['blue'],
+                     linewidth=1.0, marker='o', markersize=3, markevery=4)
 
     if 'C_G_bps_hz' in df_snr.columns and not df_snr['C_G_bps_hz'].isnull().all():
-        ax.plot(df_snr['SNR0_db'], df_snr['C_G_bps_hz'],
-                label=r'$C_G$', color=colors['red'],
-                linestyle='--', linewidth=1.0, marker='s', markersize=3, markevery=5)
+        line2 = ax1.plot(df_snr['SNR0_db'], df_snr['C_G_bps_hz'],
+                         label=r'$C_G$', color=colors['red'],
+                         linestyle='--', linewidth=1.0, marker='s', markersize=3, markevery=5)
 
-    ax.axhline(y=C_sat, color=colors['green'], linestyle=':',
-               linewidth=1.5, label=f'$C_{{\\mathrm{{sat}}}}$ = {C_sat:.2f}')
-    ax.axvline(x=SNR_crit_db, color=colors['purple'], linestyle=':',
-               linewidth=1.5, label=f'$\\mathrm{{SNR}}_{{\\mathrm{{crit}}}}$ = {SNR_crit_db:.1f} dB')
+    ax1.axhline(y=C_sat, color=colors['green'], linestyle=':',
+                linewidth=1.5, label=f'$C_{{\\mathrm{{sat}}}}$ = {C_sat:.2f}')
+    ax1.axvline(x=SNR_crit_db, color=colors['purple'], linestyle=':',
+                linewidth=1.5, label=f'$\\mathrm{{SNR}}_{{\\mathrm{{crit}}}}$ = {SNR_crit_db:.1f} dB')
 
-    ax.set_xlabel(r'$\mathrm{SNR}_0$ (dB)', fontsize=8)
-    ax.set_ylabel('Capacity (bits/s/Hz)', fontsize=8)
-    ax.legend(loc='lower right', fontsize=7)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(bottom=0)
+    ax1.set_xlabel(r'$\mathrm{SNR}_0$ (dB)', fontsize=8)
+    ax1.set_ylabel('Capacity (bits/s/Hz)', fontsize=8, color='black')
+    ax1.tick_params(axis='y', labelcolor='black')
+    ax1.set_ylim(bottom=0)
+    ax1.grid(True, alpha=0.3)
+
+    # ✅ 新增：右轴显示Jensen gap（单位统一为bits/s/Hz）
+    if 'Jensen_gap_bits' in df_snr.columns and not df_snr['Jensen_gap_bits'].isnull().all():
+        ax2 = ax1.twinx()
+        line3 = ax2.plot(df_snr['SNR0_db'], df_snr['Jensen_gap_bits'],
+                         label='Jensen Gap', color=colors['orange'],
+                         linestyle='-.', linewidth=1.0, marker='^', markersize=2, markevery=6)
+        ax2.set_ylabel('Jensen Gap (bits/s/Hz)', fontsize=8, color=colors['orange'])
+        ax2.tick_params(axis='y', labelcolor=colors['orange'])
+        ax2.set_ylim(bottom=0)
+
+        # 合并图例
+        lines = line1 + (line2 if 'C_G_bps_hz' in df_snr.columns else []) + line3
+        labels = [l.get_label() for l in lines]
+        ax1.legend(lines, labels, loc='lower right', fontsize=7)
+    else:
+        ax1.legend(loc='lower right', fontsize=7)
 
     plt.tight_layout()
 
@@ -431,8 +453,37 @@ def plot_capacity_vs_snr(df_snr: pd.DataFrame, output_dir: Path, colors: dict):
 
     plt.close()
     print("    ✓ Saved: fig_capacity_vs_snr.[png/pdf]")
-    return True
 
+    # === 补充图：归一化容量（主文用） ===
+    print("    Generating normalized capacity figure...")
+    fig, ax = plt.subplots()
+
+    C_norm = df_snr['C_J_bps_hz'] / C_sat
+    ax.plot(df_snr['SNR0_db'], C_norm,
+            label=r'$C_J / C_{\mathrm{sat}}$', color=colors['blue'],
+            linewidth=1.5, marker='o', markersize=3, markevery=4)
+
+    ax.axhline(y=1.0, color=colors['green'], linestyle=':', linewidth=1.5,
+               label='Saturation')
+    ax.axvline(x=SNR_crit_db, color=colors['purple'], linestyle=':',
+               linewidth=1.5, label=f'SNR$_{{\\mathrm{{crit}}}}$ = {SNR_crit_db:.1f} dB')
+
+    ax.set_xlabel(r'$\mathrm{SNR}_0$ (dB)', fontsize=8)
+    ax.set_ylabel(r'Normalized Capacity ($C_J / C_{\mathrm{sat}}$)', fontsize=8)
+    ax.legend(fontsize=7, loc='lower right')
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim([0, 1.1])
+
+    plt.tight_layout()
+
+    for ext in ['png', 'pdf']:
+        output_file = output_dir / f'fig_capacity_vs_snr_normalized.{ext}'
+        plt.savefig(output_file, dpi=300, bbox_inches='tight')
+
+    plt.close()
+    print("    ✓ Saved: fig_capacity_vs_snr_normalized.[png/pdf]")
+
+    return True
 
 def plot_pareto_front(df_pareto: pd.DataFrame, output_dir: Path, colors: dict):
     """Generate ISAC Pareto Front figure"""
@@ -601,7 +652,7 @@ def plot_gamma_breakdown(df_pareto: pd.DataFrame, output_dir: Path, colors: dict
 
 
 def plot_jensen_gap(df_snr: pd.DataFrame, output_dir: Path, colors: dict):
-    """Generate Jensen gap validation plot"""
+    """Generate Jensen gap validation plot (FIXED UNITS)"""
     print("\n  [Fig 7] Jensen Gap...")
 
     if 'Jensen_gap_bits' not in df_snr.columns or df_snr['Jensen_gap_bits'].isnull().all():
@@ -610,14 +661,28 @@ def plot_jensen_gap(df_snr: pd.DataFrame, output_dir: Path, colors: dict):
 
     fig, ax = plt.subplots()
 
-    ax.plot(df_snr['SNR0_db'], df_snr['Jensen_gap_bits'] * 1000,
+    # ✅ 修复：不再乘以1000，保持bits/s/Hz单位
+    ax.plot(df_snr['SNR0_db'], df_snr['Jensen_gap_bits'],  # 移除 * 1000
             color=colors['red'], linewidth=1.5, marker='o',
             markersize=3, markevery=5, label='Jensen Gap')
 
     ax.set_xlabel(r'$\mathrm{SNR}_0$ (dB)', fontsize=8)
-    ax.set_ylabel('Jensen Gap (mbits/s/Hz)', fontsize=8)
+    ax.set_ylabel('Jensen Gap (bits/s/Hz)', fontsize=8)  # ✅ 修复：改为bits/s/Hz
+
+    # ✅ 新增：标注峰值位置（应接近SNR_crit）
+    peak_idx = df_snr['Jensen_gap_bits'].idxmax()
+    peak_snr = df_snr.loc[peak_idx, 'SNR0_db']
+    peak_gap = df_snr.loc[peak_idx, 'Jensen_gap_bits']
+    ax.axvline(x=peak_snr, color='gray', linestyle=':', linewidth=1.0, alpha=0.6)
+    ax.text(peak_snr + 1, peak_gap * 0.9, f'Peak at {peak_snr:.1f} dB',
+            fontsize=6.5, rotation=90, va='bottom')
+
     ax.legend(fontsize=8, loc='best')
     ax.grid(True, alpha=0.3)
+
+    # ✅ 新增：打印统计信息
+    print(f"    Jensen gap: peak={peak_gap:.4f} bits/s/Hz at SNR0={peak_snr:.1f} dB")
+    print(f"    Mean gap: {df_snr['Jensen_gap_bits'].mean():.4f} bits/s/Hz")
 
     plt.tight_layout()
 

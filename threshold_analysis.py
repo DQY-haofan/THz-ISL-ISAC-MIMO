@@ -140,7 +140,7 @@ def run_threshold_sweep(config_path: str, grid_size: int = 10, mode: str = 'fast
     B_over_fc_vec = np.linspace(0.02, 0.15, grid_size)
 
     # L_ap/λ ratio sweep - 典型系统在3-15λ
-    Lap_over_lambda_vec = np.linspace(3, 15, grid_size)
+    Lap_over_lambda_vec = np.linspace(3, 25, grid_size)
 
     print(f"  B/f_c range: [{B_over_fc_vec[0]:.3f}, {B_over_fc_vec[-1]:.3f}]")
     print(f"  L_ap/λ range: [{Lap_over_lambda_vec[0]:.1f}, {Lap_over_lambda_vec[-1]:.1f}]")
@@ -173,11 +173,31 @@ def run_threshold_sweep(config_path: str, grid_size: int = 10, mode: str = 'fast
 
                 config['channel']['B_hz'] = B_over_fc * f_c_hz
                 config['array']['L_ap_m'] = Lap_over_lambda * lambda_c
-                config['array']['theta_0_deg'] = 5.0  # 固定小角度
+                config['array']['theta_0_deg'] = 15.0  # 固定小角度
 
                 # Calculate physics
                 g_factors = calc_g_sig_factors(config)
                 n_outputs = calc_n_f_vector(config, g_factors)
+
+                # ✅ 新增：手动修正 sig_amp_k，移除能量归一化的影响
+                if 'sig_amp_k' in g_factors and 'eta_bsq_k' in g_factors:
+                    g_ar = g_factors['g_ar']
+                    eta_bsq_k = g_factors['eta_bsq_k']
+
+                    # 重新计算未归一化的 sig_amp_k
+                    sig_amp_k_original = np.sqrt(g_ar) * eta_bsq_k
+
+                    # 替换
+                    g_factors['sig_amp_k'] = sig_amp_k_original
+
+                    # 打印诊断（第一个点）
+                    if i == 0 and j == 0:
+                        E_orig = np.sum(np.abs(sig_amp_k_original) ** 2) * (
+                                    config['channel']['B_hz'] / config['simulation']['N'])
+                        print(f"\n  [Beam Squint Fix]")
+                        print(f"    Lap/λ = {Lap_over_lambda:.1f}")
+                        print(f"    E_sig (unnormalized) = {E_orig:.3e}")
+                        print(f"    eta_bsq range: [{eta_bsq_k.min():.4f}, {eta_bsq_k.max():.4f}]")
 
                 # ===== Whittle mode =====
                 config['simulation']['FIM_MODE'] = 'Whittle'
@@ -468,15 +488,17 @@ def generate_threshold_slices_dual_xaxis(df, B_over_fc, Lap_over_lambda, output_
 
     return True
 
-def visualize_threshold_results(data_source, output_dir='figures'):
+
+def visualize_threshold_results(data_source, output_dir='figures', working_point=None):
     """
-    可视化threshold数据（完整套件）
+    可视化threshold数据（完整套件） - 完整修复版本
 
     Args:
         data_source: 可以是：
                     - Dict from run_threshold_sweep()
                     - CSV file path (str)
         output_dir: 输出目录
+        working_point: 工作点字典 {'B_over_fc': float, 'Lap_over_lambda': float}
     """
 
     print("\n" + "=" * 80)
@@ -485,7 +507,7 @@ def visualize_threshold_results(data_source, output_dir='figures'):
 
     setup_ieee_style()
 
-    # 加载数据
+    # ========== 数据加载部分（保持原样）==========
     if isinstance(data_source, dict):
         # From sweep results
         error_matrix = data_source['error_matrix']
@@ -542,43 +564,79 @@ def visualize_threshold_results(data_source, output_dir='figures'):
 
     print(f"\n  Grid dimensions:")
     print(f"    B/f_c: {len(B_over_fc)} points, range [{B_over_fc.min():.3f}, {B_over_fc.max():.3f}]")
-    print(f"    L_ap/λ: {len(Lap_over_lambda)} points, range [{Lap_over_lambda.min():.1f}, {Lap_over_lambda.max():.1f}]")
+    print(
+        f"    L_ap/λ: {len(Lap_over_lambda)} points, range [{Lap_over_lambda.min():.1f}, {Lap_over_lambda.max():.1f}]")
 
     # 创建输出目录
     os.makedirs(output_dir, exist_ok=True)
 
-    # ===== Figure 1: 2D Heatmap (主图) =====
+    # ========== Figure 1: 2D Heatmap - 修复版本 ==========
     print(f"\n[3/4] Generating 2D heatmap...")
 
-    fig, ax = plt.subplots()  # Use default IEEE size from rcParams
+    fig, ax = plt.subplots()
+
+    # ✅ 修复：在这里转换为百分数
+    error_pct = error_matrix * 100.0  # 转换为百分数
+    errors_pct = errors_valid * 100.0
 
     # 使用合适的颜色映射和范围
-    vmin = max(errors_valid.min(), 1e-4)  # 避免log(0)
-    vmax = errors_valid.max()
+    vmin = max(errors_pct.min(), 0.001)  # 0.001% 最小值
+    vmax = min(errors_pct.max(), 10.0)  # 10% 最大值
 
-    im = ax.contourf(Lap_over_lambda, B_over_fc, error_matrix,
+    # ✅ 修复：使用百分数的error_pct
+    im = ax.contourf(Lap_over_lambda, B_over_fc, error_pct,
                      levels=20, cmap='RdYlGn_r',
                      norm=LogNorm(vmin=vmin, vmax=vmax))
 
-    # 添加等高线
-    contour_levels = [0.01, 0.02, 0.05]  # 1%, 2%, 5%
-    cs = ax.contour(Lap_over_lambda, B_over_fc, error_matrix,
+    # ✅ 修复：等高线使用百分数
+    contour_levels = [0.5, 1.0, 2.0, 5.0]  # 0.5%, 1%, 2%, 5%
+    cs = ax.contour(Lap_over_lambda, B_over_fc, error_pct,
                     levels=contour_levels, colors='black',
                     linewidths=1.0, linestyles='solid')
-    ax.clabel(cs, inline=True, fontsize=7, fmt='%g%%', manual=False)
+    ax.clabel(cs, inline=True, fontsize=7, fmt='%.1f%%')
 
-    # 标注 (IEEE style - no bold, 8pt)
+    # ✅ 新增：标注工作点（星标）
+    if working_point is not None:
+        wp_B = working_point.get('B_over_fc', None)
+        wp_L = working_point.get('Lap_over_lambda', None)
+
+        if wp_B is not None and wp_L is not None:
+            # 找到最接近的网格点
+            i0 = np.argmin(np.abs(B_over_fc - wp_B))
+            j0 = np.argmin(np.abs(Lap_over_lambda - wp_L))
+
+            ax.scatter([Lap_over_lambda[j0]], [B_over_fc[i0]],
+                       marker='*', s=200, color='gold', edgecolor='black',
+                       linewidths=1.5, zorder=10, label='Working Point')
+
+            # 标注工作点误差值
+            wp_error = error_pct[i0, j0]
+            ax.text(Lap_over_lambda[j0] + 0.5, B_over_fc[i0],
+                    f'{wp_error:.2f}%', fontsize=7, color='black',
+                    bbox=dict(boxstyle='round,pad=0.3', facecolor='white', alpha=0.8))
+
+            print(f"    ✓ 工作点: B/fc={wp_B:.3f}, Lap/λ={wp_L:.1f}, error={wp_error:.3f}%")
+
+    # 标注
     ax.set_xlabel(r'Aperture Size ($L_{\mathrm{ap}}/\lambda$)', fontsize=8)
     ax.set_ylabel(r'Bandwidth Ratio ($B/f_c$)', fontsize=8)
-    # NO TITLE - IEEE style
 
-    # 颜色条
-    cbar = plt.colorbar(im, ax=ax, label='Relative Error')
-    cbar.ax.set_ylabel('Relative Error', fontsize=8)
+    # ✅ 修复：色标明确标注为百分数
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.ax.set_ylabel('Relative Error [%]', fontsize=8)
     cbar.ax.tick_params(labelsize=7)
 
-    # 网格
+    # 网格和图例
     ax.grid(True, alpha=0.3, linewidth=0.5)
+    if working_point is not None:
+        ax.legend(fontsize=7, loc='upper left')
+
+    # ✅ 新增：图注说明网格范围
+    caption = (f"Grid: B/f_c ∈ [{B_over_fc.min():.3f}, {B_over_fc.max():.3f}], "
+               f"L_ap/λ ∈ [{Lap_over_lambda.min():.1f}, {Lap_over_lambda.max():.1f}], "
+               f"N={len(errors_valid)} points")
+    ax.text(0.5, -0.18, caption, transform=ax.transAxes,
+            fontsize=6, ha='center', style='italic')
 
     plt.tight_layout()
 
@@ -590,22 +648,42 @@ def visualize_threshold_results(data_source, output_dir='figures'):
 
     plt.close()
 
-    # ===== Figure 2: Error Distribution Histogram =====
+    # ========== Figure 2: Error Distribution Histogram - 修复版本 ==========
     print(f"  Generating error histogram...")
 
-    fig, ax = plt.subplots()  # Use default IEEE size
+    fig, ax = plt.subplots()
 
-    ax.hist(errors_valid * 100, bins=30, edgecolor='black', alpha=0.7, linewidth=0.5)
-    ax.axvline(errors_valid.mean() * 100, color='#A2142F', linestyle='--',
-               linewidth=1.0, label=f'Mean: {errors_valid.mean() * 100:.3f}%')
-    ax.axvline(np.median(errors_valid) * 100, color='#0072BD', linestyle='--',
-               linewidth=1.0, label=f'Median: {np.median(errors_valid) * 100:.3f}%')
+    # ✅ 使用百分数
+    ax.hist(errors_pct, bins=30, edgecolor='black', alpha=0.7, linewidth=0.5,
+            label=f'N={len(errors_pct)} samples')
 
-    ax.set_xlabel('Relative Error (%)', fontsize=8)
+    # 统计线
+    mean_pct = errors_pct.mean()
+    median_pct = np.median(errors_pct)
+    std_pct = errors_pct.std()
+
+    ax.axvline(mean_pct, color='#A2142F', linestyle='--', linewidth=1.5,
+               label=f'Mean: {mean_pct:.3f}%')
+    ax.axvline(median_pct, color='#0072BD', linestyle='--', linewidth=1.5,
+               label=f'Median: {median_pct:.3f}%')
+
+    # ✅ 新增：正态性检验
+    from scipy.stats import shapiro
+    stat, p_value = shapiro(errors_pct)
+
+    ax.set_xlabel('Relative Error [%]', fontsize=8)
     ax.set_ylabel('Frequency', fontsize=8)
-    # NO TITLE - IEEE style
-    ax.legend(fontsize=8, framealpha=0.9)
-    ax.grid(True, alpha=0.3, linewidth=0.5)
+    ax.legend(fontsize=7, loc='upper right')
+    ax.grid(True, alpha=0.3)
+
+    # ✅ 新增：图注包含统计信息
+    stats_text = (f"Mean={mean_pct:.3f}%, Std={std_pct:.3f}%, "
+                  f"Shapiro-Wilk p={p_value:.3g}")
+    ax.text(0.5, -0.18, stats_text, transform=ax.transAxes,
+            fontsize=6, ha='center', style='italic')
+
+    print(f"    统计: Mean={mean_pct:.3f}%, Median={median_pct:.3f}%, Std={std_pct:.3f}%")
+    print(f"    正态性检验: Shapiro-Wilk stat={stat:.4f}, p-value={p_value:.3g}")
 
     plt.tight_layout()
 
@@ -617,7 +695,26 @@ def visualize_threshold_results(data_source, output_dir='figures'):
     plt.close()
 
     # ===== Figure 3: 1D Slices =====
+    # 加载数据
+    if isinstance(data_source, dict):
+        # From sweep results
+        error_matrix = data_source['error_matrix']
+        B_over_fc = data_source['B_over_fc_vec']
+        Lap_over_lambda = data_source['Lap_over_lambda_vec']
 
+        # Create DataFrame from matrices
+        detailed_rows = []
+        for i, b in enumerate(B_over_fc):
+            for j, l in enumerate(Lap_over_lambda):
+                detailed_rows.append({
+                    'B_over_fc': b,
+                    'Lap_over_lambda': l,
+                    'relative_error': error_matrix[i, j]
+                })
+        df = pd.DataFrame(detailed_rows)
+
+    B_over_fc = data_source['B_over_fc_vec']
+    Lap_over_lambda = data_source['Lap_over_lambda_vec']
     print(f"  Generating combined 1D slice plot...")
 
     generate_threshold_slices_combined(df, B_over_fc, Lap_over_lambda, output_dir)

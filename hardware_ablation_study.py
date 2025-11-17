@@ -309,53 +309,108 @@ def run_single_point(config: dict, alpha: float, config_name: str) -> Dict:
         }
 
 
-def run_ablation_sweep(base_config: dict, alpha_vec: np.ndarray,
+def run_ablation_sweep(config: dict, alpha_vec: np.ndarray,
                        enhance_hw: bool = True) -> pd.DataFrame:
-    """运行完整消融研究"""
+    """
+    执行消融研究的α扫描
+    修复: 确保每个α都有完整的配置数据，便于计算相对比值
+    """
     print("\n" + "═" * 80)
-    print("运行消融研究")
+    print("消融研究 α 扫描")
     print("═" * 80)
 
-    configs = create_config_variants(base_config, enhance_hw=enhance_hw)
-    all_results = []
+    variants = create_config_variants(config, enhance_hw=enhance_hw)
 
-    for cfg_name, cfg in configs.items():
-        print(f"\n{'─' * 80}")
-        print(f"[{cfg_name}] Running α sweep ({len(alpha_vec)} points)...")
-        print(f"{'─' * 80}")
+    # 存储结果 - 使用字典结构便于查找
+    results_dict = {cfg_name: {} for cfg_name in variants.keys()}
+    results = []
 
-        for i, alpha in enumerate(alpha_vec):
-            result = run_single_point(cfg, alpha, cfg_name)
-            all_results.append(result)
+    total_points = len(alpha_vec) * len(variants)
+    completed = 0
 
-            # 打印进度
-            if (i + 1) % 5 == 0 or i == 0 or i == len(alpha_vec) - 1:
-                rmse = result['RMSE_mm']
-                if np.isnan(rmse):
-                    err_msg = result.get('error', 'Unknown')
-                    print(f"  [{i + 1:2d}/{len(alpha_vec)}] α={alpha:.3f} → ERROR: {err_msg}")
-                else:
-                    # 如果有诊断信息，显示硬件比例
-                    if 'ratio_gamma_to_N0_dB' in result and not np.isnan(result['ratio_gamma_to_N0_dB']):
-                        ratio_db = result['ratio_gamma_to_N0_dB']
-                        print(f"  [{i + 1:2d}/{len(alpha_vec)}] α={alpha:.3f} → RMSE={rmse:7.3f} mm  "
-                              f"(γ/N0={ratio_db:+.1f} dB)")
-                    else:
-                        print(f"  [{i + 1:2d}/{len(alpha_vec)}] α={alpha:.3f} → RMSE={rmse:7.3f} mm")
+    print(f"\n配置变体: {list(variants.keys())}")
+    print(f"α 范围: [{alpha_vec[0]:.2f}, {alpha_vec[-1]:.2f}] ({len(alpha_vec)} 点)")
+    print(f"总计算点数: {total_points}")
+    print()
 
-    df = pd.DataFrame(all_results)
+    # 按 α 循环（外层），确保每个 α 都计算所有配置
+    for alpha in alpha_vec:
+        print(f"\n[α = {alpha:.3f}] ", end="")
 
-    # 统计成功/失败
-    n_total = len(df)
-    n_valid = df['RMSE_mm'].notna().sum()
-    n_failed = n_total - n_valid
+        # 为当前 α 计算所有配置
+        alpha_results = {}
 
-    print(f"\n{'═' * 80}")
-    print(f"消融研究完成:")
-    print(f"  总计算点: {n_total}")
-    print(f"  成功: {n_valid} ({n_valid / n_total * 100:.1f}%)")
-    print(f"  失败: {n_failed} ({n_failed / n_total * 100:.1f}%)")
-    print(f"{'═' * 80}")
+        for cfg_name, cfg in variants.items():
+            cfg_temp = copy.deepcopy(cfg)
+            cfg_temp['isac_model']['alpha'] = alpha
+
+            try:
+                result = run_single_point(cfg_temp, alpha, cfg_name)
+
+                # 转换单位: m → mm
+                rmse_m = np.sqrt(result['BCRLB_tau']) * cfg['channel']['c_mps'] / 2
+                rmse_mm = rmse_m * 1000.0
+
+                # 存储到字典中
+                alpha_results[cfg_name] = rmse_mm
+                results_dict[cfg_name][alpha] = rmse_mm
+
+                # 添加到结果列表
+                result_row = {
+                    'alpha': alpha,
+                    'config': cfg_name,
+                    'RMSE_mm': rmse_mm,
+                    'BCRLB_tau': result['BCRLB_tau'],
+                    'method': result.get('method', 'N/A'),
+                    'N': result.get('N', np.nan),
+                }
+
+                # 添加诊断信息（如果有）
+                if 'diag' in result:
+                    result_row['ratio_gamma_to_N0_dB'] = result['diag'].get('ratio_gamma_to_N0_dB', np.nan)
+
+                results.append(result_row)
+
+                print(".", end="", flush=True)
+
+            except Exception as e:
+                print(f"X({cfg_name})", end="", flush=True)
+                print(f"\n  ⚠️  错误 [α={alpha:.3f}, {cfg_name}]: {str(e)[:100]}")
+
+                # 添加失败记录
+                results.append({
+                    'alpha': alpha,
+                    'config': cfg_name,
+                    'RMSE_mm': np.nan,
+                    'BCRLB_tau': np.nan,
+                    'method': 'FAILED',
+                    'N': np.nan,
+                })
+
+            completed += 1
+
+        # 计算并添加相对比值（对当前 α 的所有配置）
+        if 'AWGN' in alpha_results and not np.isnan(alpha_results['AWGN']):
+            rmse_awgn = alpha_results['AWGN']
+
+            # 为每个配置添加 ratio 列
+            for i, row in enumerate(results):
+                if row['alpha'] == alpha and not np.isnan(row['RMSE_mm']):
+                    ratio = row['RMSE_mm'] / rmse_awgn
+                    results[i]['ratio_to_AWGN'] = ratio
+
+        print(f" ✓ ({completed}/{total_points})")
+
+    # 转换为 DataFrame
+    df = pd.DataFrame(results)
+
+    # 添加相对比值列（确保所有行都有）
+    if 'ratio_to_AWGN' not in df.columns:
+        df['ratio_to_AWGN'] = np.nan
+
+    print(f"\n✓ 扫描完成: {len(df)} 数据点")
+    print(f"  成功: {df['RMSE_mm'].notna().sum()}")
+    print(f"  失败: {df['RMSE_mm'].isna().sum()}")
 
     return df
 
@@ -434,70 +489,137 @@ def plot_ablation(df: pd.DataFrame, output_dir: Path, rmse_theory: float = None)
 
 
 def plot_relative_degradation(df: pd.DataFrame, output_dir: Path):
-    """绘制相对 AWGN 的劣化（更敏感地显示差异）"""
-    print("\n[绘图] 相对劣化图...")
+    """
+    绘制相对劣化图
+    修复: 使用同一 α 的 AWGN 作为分母，确保比值准确
+    """
+    print("\n绘制相对劣化图...")
 
-    # 获取 AWGN 基线
-    awgn_data = df[df['config'] == 'AWGN'].copy()
-    awgn_data = awgn_data[awgn_data['RMSE_mm'].notna()].sort_values('alpha')
+    setup_ieee_style()
+    fig, ax = plt.subplots(figsize=(3.5, 2.8))  # 稍高一点便于图例
 
-    if len(awgn_data) < 3:
-        print("  ⚠️  AWGN 数据点不足，跳过相对劣化图")
-        return
-
-    alpha_vec = awgn_data['alpha'].values
-    rmse_awgn = awgn_data['RMSE_mm'].values
-
-    fig, ax = plt.subplots(figsize=(3.5, 2.625))
-
-    styles = {
-        'HW': {'color': '#0072BD', 'label': 'HW', 'linestyle': '-', 'marker': 's'},
-        'HW+PN': {'color': '#D95319', 'label': 'HW+PN', 'linestyle': '-', 'marker': '^'},
-        'HW+PN+DSE': {'color': '#77AC30', 'label': 'HW+PN+DSE', 'linestyle': '-', 'marker': 'v'},
-        'Full': {'color': '#A2142F', 'label': 'Full', 'linestyle': '-', 'marker': 'd'},
+    # 配置样式
+    config_styles = {
+        'HW': {
+            'color': '#A2142F',
+            'label': 'HW only',
+            'linestyle': '-',
+            'marker': 's'
+        },
+        'HW+PN': {
+            'color': '#D95319',
+            'label': 'HW+PN',
+            'linestyle': '-',
+            'marker': '^'
+        },
+        'HW+PN+DSE': {
+            'color': '#EDB120',
+            'label': 'HW+PN+DSE',
+            'linestyle': '-',
+            'marker': 'o'
+        },
+        'Full': {
+            'color': '#7E2F8E',
+            'label': 'Full model',
+            'linestyle': '-',
+            'marker': 'v'
+        }
     }
 
-    for cfg_name, style in styles.items():
-        data = df[df['config'] == cfg_name].copy()
-        data = data[data['RMSE_mm'].notna()].sort_values('alpha')
+    # 提取 AWGN 基线
+    df_awgn = df[df['config'] == 'AWGN'].copy()
+    df_awgn = df_awgn.sort_values('alpha')
 
-        if len(data) < 3:
+    if len(df_awgn) < 2:
+        print("  ⚠️  AWGN 数据不足，无法绘制相对图")
+        return
+
+    alpha_awgn = df_awgn['alpha'].values
+    rmse_awgn = df_awgn['RMSE_mm'].values
+
+    # 移除 NaN
+    valid_mask = ~np.isnan(rmse_awgn)
+    alpha_awgn = alpha_awgn[valid_mask]
+    rmse_awgn = rmse_awgn[valid_mask]
+
+    print(f"  AWGN 基线: {len(alpha_awgn)} 个 α 点")
+
+    # 绘制各配置的相对比值
+    for cfg_name, style in config_styles.items():
+        df_cfg = df[df['config'] == cfg_name].copy()
+        df_cfg = df_cfg.sort_values('alpha')
+
+        if len(df_cfg) < 2:
+            print(f"  ⚠️  {cfg_name} 数据不足，跳过")
             continue
 
-        # 插值到 AWGN 的 α 网格（简单方法：最近邻匹配）
-        relative = []
-        alpha_plot = []
-        for a, r_awgn in zip(alpha_vec, rmse_awgn):
-            # 找最近的 α 点
-            idx = np.argmin(np.abs(data['alpha'].values - a))
-            if np.abs(data['alpha'].values[idx] - a) < 0.02:  # 容差
-                r_cfg = data['RMSE_mm'].values[idx]
-                relative.append(r_cfg / r_awgn)
-                alpha_plot.append(a)
+        # 对齐到 AWGN 的 α 网格
+        alpha_cfg = []
+        ratio_cfg = []
 
-        if len(relative) > 2:
-            ax.plot(alpha_plot, relative,
+        for a_awgn, r_awgn in zip(alpha_awgn, rmse_awgn):
+            # 找到最接近的 α 点
+            idx = np.argmin(np.abs(df_cfg['alpha'].values - a_awgn))
+            a_match = df_cfg['alpha'].values[idx]
+
+            # 容差检查
+            if np.abs(a_match - a_awgn) < 0.005:  # 容差 0.005
+                r_cfg = df_cfg['RMSE_mm'].values[idx]
+
+                if not np.isnan(r_cfg) and r_awgn > 0:
+                    ratio = r_cfg / r_awgn
+
+                    # 合理性检查（防止异常值）
+                    if 0.1 < ratio < 50:
+                        alpha_cfg.append(a_awgn)
+                        ratio_cfg.append(ratio)
+
+        if len(alpha_cfg) > 2:
+            ax.plot(alpha_cfg, ratio_cfg,
                     color=style['color'],
                     label=style['label'],
                     linestyle=style['linestyle'],
                     marker=style['marker'],
                     linewidth=1.5,
                     markersize=4,
-                    markevery=max(1, len(alpha_plot) // 10),
+                    markevery=max(1, len(alpha_cfg) // 8),
                     alpha=0.9)
 
-    ax.axhline(y=1.0, color='k', linestyle='--', alpha=0.4, linewidth=1.0, label='AWGN baseline')
-    ax.set_xlabel(r'ISAC Overhead $\alpha$')
-    ax.set_ylabel(r'RMSE / RMSE$_{\mathrm{AWGN}}$')
-    ax.set_xlim([alpha_vec[0] * 0.95, alpha_vec[-1] * 1.05])
-    ax.set_ylim([0.8, None])  # 从 0.8 开始，方便看细微差异
-    ax.legend(fontsize=7, framealpha=0.95)
-    ax.grid(True, alpha=0.3)
+            print(f"  ✓ {cfg_name}: {len(alpha_cfg)} 点, "
+                  f"比值范围 [{min(ratio_cfg):.2f}, {max(ratio_cfg):.2f}]")
+        else:
+            print(f"  ⚠️  {cfg_name}: 有效点不足 ({len(alpha_cfg)})")
+
+    # 添加基线
+    ax.axhline(y=1.0, color='gray', linestyle='--',
+               linewidth=1.2, alpha=0.6, label='AWGN baseline', zorder=1)
+
+    # 设置坐标轴
+    ax.set_xlabel(r'ISAC Overhead $\alpha$', fontsize=8)
+    ax.set_ylabel(r'RMSE / RMSE$_{\mathrm{AWGN}}$', fontsize=8)
+    ax.set_xlim([alpha_awgn[0] * 0.95, alpha_awgn[-1] * 1.05])
+
+    # 使用对数 y 轴（如果跨度大）
+    ratio_all = df['ratio_to_AWGN'].dropna()
+    if len(ratio_all) > 0:
+        ratio_max = ratio_all.max()
+        if ratio_max > 5:
+            ax.set_yscale('log')
+            ax.set_ylabel(r'RMSE / RMSE$_{\mathrm{AWGN}}$ (log scale)', fontsize=8)
+        else:
+            ax.set_ylim([0.9, ratio_max * 1.1])
+
+    ax.legend(fontsize=6.5, framealpha=0.95, loc='best')
+    ax.grid(True, alpha=0.3, which='both')
 
     plt.tight_layout()
-    plt.savefig(output_dir / 'fig_ablation_relative.pdf', dpi=300, bbox_inches='tight')
-    plt.savefig(output_dir / 'fig_ablation_relative.png', dpi=300, bbox_inches='tight')
-    print(f"  ✓ 保存: {output_dir / 'fig_ablation_relative.pdf'}")
+
+    # 保存
+    for ext in ['pdf', 'png']:
+        save_path = output_dir / f'fig_ablation_relative.{ext}'
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        print(f"  ✓ 保存: {save_path}")
+
     plt.close()
 
 
