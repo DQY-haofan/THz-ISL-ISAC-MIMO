@@ -162,7 +162,6 @@ def calc_n_f_vector(config: Dict[str, Any], g_sig_factors: Dict[str, Union[float
     # Total distortion power from all Tx and Rx elements
     # Each element contributes independent distortion
     sigma2_gamma = Gamma_eff_per_element * P_tx_per_element * (Nt + Nr)
-
     # ===================================================================
     # Signal power at receiver (for reference and SNR calculations)
     # ===================================================================

@@ -41,35 +41,62 @@ def calc_C_J(
         SNR0_db_vec: Union[List[float], np.ndarray],
         compute_C_G: bool = False
 ) -> Dict[str, Union[float, np.ndarray]]:
-    """Calculate communication capacity (Jensen bound) - UNCHANGED (correct as-is)"""
+    """
+    Calculate communication capacity (Jensen bound)
 
-    # Extract key parameters
-    G_sig_avg = g_sig_factors['G_sig_avg']
+    FIX: Decoupled signal gain (coherent, N^2) from distortion gain (incoherent, N).
+    """
+
+    # Extract parameters
+    G_sig_avg = g_sig_factors['G_sig_avg']  # Contains Nt*Nr gain
     sigma_2_phi_c_res = n_f_outputs['sigma_2_phi_c_res']
-    Gamma_eff_total = n_f_outputs['Gamma_eff_total']
-    P_tx_per_element = n_f_outputs['P_tx_per_element']
 
-    # Note: Gamma_eff_total now correctly scales as (Nt+Nr), not g_ar
-    # This doesn't affect C_J calculation, but SNR_crit will shift left with larger arrays
+    # Gamma_eff_total here is (Nt+Nr) * Gamma_per_element (from physics_engine)
+    Gamma_eff_total_incoherent = n_f_outputs['Gamma_eff_total']
+
+    Nt = config['array']['Nt']
 
     phase_coherence_loss = np.exp(-sigma_2_phi_c_res)
-    SNR0_vec = 10 ** (np.array(SNR0_db_vec) / 10.0)
+    SNR0_vec = 10 ** (np.array(SNR0_db_vec) / 10.0)  # SNR0 = P_total_tx / N0
     C_J_vec = np.zeros_like(SNR0_vec)
 
     for i, SNR0 in enumerate(SNR0_vec):
-        # SNR includes array gain
-        numerator = SNR0 * G_sig_avg * phase_coherence_loss
-        # Distortion now scales correctly: Gamma_eff_total ∝ (Nt+Nr)
-        denominator = 1.0 + SNR0 * G_sig_avg * Gamma_eff_total
+        # --- Numerator: Signal Power (Relative to Thermal Noise) ---
+        # Signal power benefits from full coherent Array Gain (G_sig_avg ~ Nt*Nr)
+        # Note: SNR0 is defined as Total_Power / N0.
+        # The effective received SNR (thermal only) is SNR0 * G_sig_avg / Nt (assuming EIRP convention)
+        # OR straightforwardly: if SNR0 defined as P_tx_total/N0, and G_sig is system gain:
+        # Let's align with physics_engine: P_rx = P_tx_elem * G_sig_avg.
+        # P_tx_elem = P_total / Nt = (SNR0 * N0) / Nt.
+        # So P_rx / N0 = (SNR0 / Nt) * G_sig_avg.
+
+        numerator = (SNR0 / Nt) * G_sig_avg * phase_coherence_loss
+
+        # --- Denominator: 1 + Distortion Power (Relative to Thermal Noise) ---
+        # Distortion is incoherent. Total distortion power P_dist scaled by N (not N^2).
+        # P_dist / N0 = (P_tx_elem / N0) * Gamma_eff_total_incoherent
+        #             = (SNR0 / Nt) * Gamma_eff_total_incoherent
+
+        distortion_term = (SNR0 / Nt) * Gamma_eff_total_incoherent
+
+        denominator = 1.0 + distortion_term
+
         SINR_eff = numerator / denominator
         C_J_vec[i] = np.log2(1.0 + SINR_eff)
 
-    SINR_sat = phase_coherence_loss / Gamma_eff_total
+    # --- Saturation Capacity (SNR -> infinity) ---
+    # C_sat = log2(1 + Numerator_Inf / Denominator_Inf)
+    # SNR terms cancel out.
+    # SINR_sat = (G_sig_avg * coherence) / Gamma_eff_total_incoherent
+
+    SINR_sat = (G_sig_avg * phase_coherence_loss) / Gamma_eff_total_incoherent
     C_sat = np.log2(1.0 + SINR_sat)
 
-    # Critical SNR (linear units) - now correctly shifts left with array size
-    # SNR_crit ∝ 1 / (g_ar * Gamma) ∝ (Nt+Nr) / (Nt*Nr)
-    SNR_crit_linear = 1.0 / (G_sig_avg * Gamma_eff_total)
+    # --- Critical SNR ---
+    # Point where Distortion Power = Thermal Noise Power (1.0)
+    # (SNR0_crit / Nt) * Gamma_eff_total_incoherent = 1.0
+
+    SNR_crit_linear = Nt / Gamma_eff_total_incoherent
     SNR_crit_db = 10.0 * np.log10(SNR_crit_linear)
 
     results = {
@@ -81,29 +108,30 @@ def calc_C_J(
     }
 
     if compute_C_G:
-        B_hz = config['channel']['B_hz']
-        N = config['simulation']['N']
+        # Similar fix for Exact Gaussian Capacity
         eta_bsq_k = g_sig_factors['eta_bsq_k']
-
-        G_scalars = (g_sig_factors['g_ar'] *
-                     g_sig_factors['rho_Q'] *
-                     g_sig_factors['rho_APE'] *
-                     g_sig_factors['rho_A'] )
+        G_scalars = (g_sig_factors['g_ar'] * g_sig_factors['rho_Q'] * g_sig_factors['rho_APE'] * g_sig_factors['rho_A'])
 
         C_G_vec = np.zeros_like(SNR0_vec)
 
         for i, SNR0 in enumerate(SNR0_vec):
+            # Frequency dependent gain
             G_sig_f = G_scalars * eta_bsq_k
-            denominator_f = 1.0 + SNR0 * G_sig_f * Gamma_eff_total
-            SINR_f = (SNR0 * G_sig_f * phase_coherence_loss) / denominator_f
+
+            # Apply same scaling logic
+            # Signal(f) = (SNR0/Nt) * G_sig_f * coherence
+            # Dist = (SNR0/Nt) * Gamma_incoherent
+
+            num_f = (SNR0 / Nt) * G_sig_f * phase_coherence_loss
+            denom_f = 1.0 + (SNR0 / Nt) * Gamma_eff_total_incoherent
+
+            SINR_f = num_f / denom_f
             C_G_vec[i] = np.mean(np.log2(1.0 + SINR_f))
 
         results['C_G_vec'] = C_G_vec
-        results['Jensen_gap_db'] = 10 * np.log10(2 ** results['C_J_vec'] / 2 ** C_G_vec)
         results['Jensen_gap_bits'] = results['C_J_vec'] - C_G_vec
 
     return results
-
 
 def calc_BCRLB(
         config: Dict[str, Any],
