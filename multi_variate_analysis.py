@@ -6,7 +6,8 @@ Multi-Variate Analysis for THz-ISL MIMO ISAC
 功能：
 1. 生成不同阵列规模 (Nt) 下的 Pareto 边界族
 2. 生成不同硬件质量 (Hardware Quality) 下的 Pareto 边界族
-3. 生成 IEEE 风格的高信息密度对比图
+3. 生成不同带宽 (Bandwidth) 下的 Pareto 边界族 (New!)
+4. 自动保存 PNG, PDF 和 CSV 数据
 
 Usage:
     python multi_variate_analysis.py [config.yaml]
@@ -19,45 +20,53 @@ import yaml
 import sys
 import copy
 import io
+import os
 from pathlib import Path
 
-# 防止中文乱码
+# 防止 Windows 控制台中文乱码
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-# 导入核心引擎
+# 导入核心物理引擎
 try:
     from physics_engine import calc_g_sig_factors, calc_n_f_vector, validate_config
     from limits_engine import calc_C_J, calc_BCRLB
 except ImportError as e:
     print(f"❌ Error importing engines: {e}")
+    print("   Please ensure physics_engine.py and limits_engine.py are in the same directory.")
     sys.exit(1)
 
 
 def setup_ieee_style():
-    """IEEE 期刊绘图风格"""
+    """IEEE 期刊绘图风格 (Single Column)"""
     plt.rcParams.update({
         'figure.figsize': (3.5, 2.625),
         'figure.dpi': 300,
         'savefig.dpi': 300,
         'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.05,
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Helvetica', 'Arial'],
+        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
         'font.size': 8,
         'axes.labelsize': 8,
+        'axes.titlesize': 8,
         'legend.fontsize': 7,
         'lines.linewidth': 1.2,
+        'lines.markersize': 4,
         'axes.grid': True,
         'grid.alpha': 0.3,
+        'grid.linewidth': 0.5,
     })
+    # IEEE 标准色盘
     return {
         'blue': '#0072BD', 'orange': '#D95319', 'green': '#77AC30',
-        'purple': '#7E2F8E', 'red': '#A2142F', 'cyan': '#4DBEEE'
+        'purple': '#7E2F8E', 'red': '#A2142F', 'cyan': '#4DBEEE',
+        'black': '#000000', 'gray': '#7F7F7F'
     }
 
 
-def run_pareto_for_config(config, label, tag):
+def run_pareto_for_config(config, label, tag_col_name, tag_value):
     """为特定配置计算完整的 Pareto 边界"""
-    alpha_vec = np.linspace(0.05, 0.30, 15)  # 聚焦于感兴趣区域
+    alpha_vec = np.linspace(0.05, 0.30, 20)  # 聚焦于感兴趣区域
     results = []
 
     # 预计算固定参数
@@ -83,10 +92,10 @@ def run_pareto_for_config(config, label, tag):
 
             results.append({
                 'alpha': alpha,
-                'R_net': R_net,
+                'R_net_bps_hz': R_net,
                 'RMSE_mm': RMSE_m * 1000.0,
                 'label': label,
-                'tag': tag
+                tag_col_name: tag_value
             })
         except Exception:
             continue
@@ -94,17 +103,33 @@ def run_pareto_for_config(config, label, tag):
     return pd.DataFrame(results)
 
 
+def save_plot_and_data(fig, df, filename_base, output_dir):
+    """同时保存 PNG, PDF 和 CSV"""
+    # Save CSV
+    csv_path = output_dir / f"{filename_base}.csv"
+    df.to_csv(csv_path, index=False)
+
+    # Save Figures
+    png_path = output_dir / f"{filename_base}.png"
+    pdf_path = output_dir / f"{filename_base}.pdf"
+
+    fig.tight_layout()
+    fig.savefig(png_path)
+    fig.savefig(pdf_path)
+
+    print(f"  ✓ Saved: {filename_base} (.png, .pdf, .csv)")
+
+
 def sweep_array_size(base_config, colors, output_dir):
     """
-    场景 A: 阵列规模扫描 (Array Size Sweep)
-    展示 Nt 对 Pareto 边界的影响
+    场景 A: 阵列规模扫描 (Nt Scaling)
+    展示: 增大 N 对感知收益巨大，但对通信收益受限（甚至受损）
     """
-    print("\n[Scenario A] Sweeping Array Sizes...")
+    print("\n[Scenario A] Sweeping Array Sizes (Nt)...")
 
-    Nt_values = [16, 64, 256]  # 对数级增长
-    all_data = []
+    Nt_values = [16, 64, 256]
+    all_dfs = []
 
-    # 颜色映射
     color_map = {16: colors['blue'], 64: colors['orange'], 256: colors['purple']}
 
     fig, ax = plt.subplots()
@@ -113,18 +138,17 @@ def sweep_array_size(base_config, colors, output_dir):
         print(f"  Simulating Nt = Nr = {Nt}...")
         cfg = copy.deepcopy(base_config)
         cfg['array']['Nt'] = Nt
-        cfg['array']['Nr'] = Nt  # 假设对称阵列
+        cfg['array']['Nr'] = Nt
 
-        df = run_pareto_for_config(cfg, label=f'$N={Nt}$', tag=Nt)
-        all_data.append(df)
+        # 调整 N (观测点数) 以保持处理增益一致性？(可选，这里保持 N 不变以控制变量)
 
-        # 绘图
-        ax.plot(df['RMSE_mm'], df['R_net'], 'o-',
-                label=f'$N_t=N_r={Nt}$',
-                color=color_map[Nt], markersize=3)
+        df = run_pareto_for_config(cfg, label=f'$N={Nt}$', tag_col_name='Nt', tag_value=Nt)
+        if not df.empty:
+            all_dfs.append(df)
 
-        # 标注 alpha 方向
-        # ax.arrow(...) 可以添加箭头指示 alpha 增大方向
+            ax.plot(df['RMSE_mm'], df['R_net_bps_hz'], 'o-',
+                    label=f'$N_t=N_r={Nt}$',
+                    color=color_map[Nt], markersize=3, linewidth=1.2)
 
     ax.set_xlabel('Range RMSE (mm) [Log Scale]')
     ax.set_ylabel('Net Rate $R_{net}$ (bits/s/Hz)')
@@ -132,51 +156,50 @@ def sweep_array_size(base_config, colors, output_dir):
     ax.grid(True, which='both', alpha=0.3)
     ax.legend(loc='lower left')
 
-    # 添加物理洞察标注
-    ax.text(0.95, 0.95, "Larger Array $\\rightarrow$\nBetter Sensing & Comms",
-            transform=ax.transAxes, ha='right', va='top', fontsize=7,
-            bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
 
-    plt.tight_layout()
-    plt.savefig(output_dir / 'fig_multi_array_size.pdf')
-    plt.savefig(output_dir / 'fig_multi_array_size.png')
-    print("  ✓ Saved fig_multi_array_size")
+
+    if all_dfs:
+        full_df = pd.concat(all_dfs)
+        save_plot_and_data(fig, full_df, 'fig_multi_array_size', output_dir)
+    plt.close()
 
 
 def sweep_hardware_quality(base_config, colors, output_dir):
     """
-    场景 B: 硬件质量扫描 (Hardware Quality Sweep)
-    展示 硬件参数 对 Pareto 边界的压缩作用
+    场景 B: 硬件质量扫描 (Hardware Sensitivity)
+    展示: 廉价硬件如何显著压缩 Pareto 前沿
     """
     print("\n[Scenario B] Sweeping Hardware Quality...")
 
     scenarios = {
-        'Ideal': {'pa': 0.0, 'adc': 100, 'iq': -100, 'pn': 0.0},  # 近似理想
-        'SoA': {'pa': 0.005, 'adc': 10, 'iq': -40, 'pn': 0.01},  # 高端
-        'Low-Cost': {'pa': 0.05, 'adc': 6, 'iq': -20, 'pn': 0.1}  # 低端
+        'Ideal': {'pa': 0.0, 'adc': 100, 'iq': -120, 'pn': 0.0},  # 近似完美
+        'SoA': {'pa': 0.005, 'adc': 10, 'iq': -40, 'pn': 0.01},  # 高端商用
+        'Low-Cost': {'pa': 0.05, 'adc': 6, 'iq': -20, 'pn': 0.1}  # 低成本/立方星
     }
 
     scenario_colors = {'Ideal': 'black', 'SoA': colors['green'], 'Low-Cost': colors['red']}
     line_styles = {'Ideal': '--', 'SoA': '-', 'Low-Cost': '-.'}
 
     fig, ax = plt.subplots()
+    all_dfs = []
 
     for name, params in scenarios.items():
         print(f"  Simulating {name} Hardware...")
         cfg = copy.deepcopy(base_config)
 
-        # 应用硬件参数
         cfg['hardware']['gamma_pa_floor'] = params['pa']
         cfg['hardware']['gamma_adc_bits'] = params['adc']
         cfg['hardware']['gamma_iq_irr_dbc'] = params['iq']
         cfg['pn_model']['sigma_rel_sq_rad2'] = params['pn']
 
-        df = run_pareto_for_config(cfg, label=name, tag=name)
+        df = run_pareto_for_config(cfg, label=name, tag_col_name='Quality', tag_value=name)
+        if not df.empty:
+            all_dfs.append(df)
 
-        ax.plot(df['RMSE_mm'], df['R_net'],
-                linestyle=line_styles[name],
-                marker='o' if name != 'Ideal' else None,
-                label=name, color=scenario_colors[name], markersize=3)
+            ax.plot(df['RMSE_mm'], df['R_net_bps_hz'],
+                    linestyle=line_styles[name],
+                    marker='o' if name != 'Ideal' else None,
+                    label=name, color=scenario_colors[name], markersize=3)
 
     ax.set_xlabel('Range RMSE (mm) [Log Scale]')
     ax.set_ylabel('Net Rate $R_{net}$ (bits/s/Hz)')
@@ -184,36 +207,93 @@ def sweep_hardware_quality(base_config, colors, output_dir):
     ax.grid(True, which='both', alpha=0.3)
     ax.legend()
 
-    # 标注 Gap
-    ax.text(0.05, 0.1, "Hardware Gap:\nLow-Cost suffers\nsevere degradation",
-            transform=ax.transAxes, ha='left', va='bottom', fontsize=7, color='red')
 
-    plt.tight_layout()
-    plt.savefig(output_dir / 'fig_multi_hardware.pdf')
-    plt.savefig(output_dir / 'fig_multi_hardware.png')
-    print("  ✓ Saved fig_multi_hardware")
+
+    if all_dfs:
+        full_df = pd.concat(all_dfs)
+        save_plot_and_data(fig, full_df, 'fig_multi_hardware', output_dir)
+    plt.close()
+
+
+def sweep_bandwidth(base_config, colors, output_dir):
+    """
+    场景 C: 带宽扫描 (Bandwidth Trade-off)
+    展示: B 增大 -> RMSE 改善, 但 Beam Squint 导致 Rate 下降
+    """
+    print("\n[Scenario C] Sweeping Bandwidth (B)...")
+
+    B_values = [5e9, 10e9, 20e9]  # 5, 10, 20 GHz
+    B_labels = ["5 GHz", "10 GHz", "20 GHz"]
+
+    color_map = {5e9: colors['blue'], 10e9: colors['green'], 20e9: colors['red']}
+
+    fig, ax = plt.subplots()
+    all_dfs = []
+
+    for B, label in zip(B_values, B_labels):
+        print(f"  Simulating B = {label}...")
+        cfg = copy.deepcopy(base_config)
+        cfg['channel']['B_hz'] = float(B)
+
+        # 注意: 改变 B 时保持 N 不变意味着频率分辨率改变
+
+        df = run_pareto_for_config(cfg, label=label, tag_col_name='Bandwidth_Hz', tag_value=B)
+        if not df.empty:
+            all_dfs.append(df)
+
+            ax.plot(df['RMSE_mm'], df['R_net_bps_hz'], 'o-',
+                    label=label,
+                    color=color_map[B], markersize=3)
+
+    ax.set_xlabel('Range RMSE (mm) [Log Scale]')
+    ax.set_ylabel('Net Rate $R_{net}$ (bits/s/Hz)')
+    ax.set_xscale('log')
+    ax.grid(True, which='both', alpha=0.3)
+    ax.legend(loc='lower left')
+
+
+
+    if all_dfs:
+        full_df = pd.concat(all_dfs)
+        save_plot_and_data(fig, full_df, 'fig_multi_bandwidth', output_dir)
+    plt.close()
 
 
 def main():
     print("=" * 80)
     print("MULTI-VARIATE ANALYSIS: FAMILY OF CURVES GENERATOR")
+    print("IEEE Transactions Grade Visualization")
     print("=" * 80)
 
     colors = setup_ieee_style()
     output_dir = Path('figures_multi')
     output_dir.mkdir(exist_ok=True)
 
-    # Load Config
-    with open('config.yaml', 'r', encoding='utf-8') as f:
-        config = yaml.safe_load(f)
+    # Load Config with UTF-8 encoding fix
+    config_path = 'config.yaml'
+    if not os.path.exists(config_path):
+        print(f"❌ Config file not found: {config_path}")
+        sys.exit(1)
+
+    try:
+        # ✅ 关键修正: 指定 encoding='utf-8'
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+    except Exception as e:
+        print(f"❌ Error loading config: {e}")
+        sys.exit(1)
 
     # Run Sweeps
     try:
         sweep_array_size(config, colors, output_dir)
         sweep_hardware_quality(config, colors, output_dir)
-        print("\n✓ All multi-variate figures generated in 'figures_multi/'")
+        sweep_bandwidth(config, colors, output_dir)
+        print(f"\n✓ Analysis Complete. Outputs saved to '{output_dir}/'")
+        print("  - fig_multi_array_size.{png,pdf,csv}")
+        print("  - fig_multi_hardware.{png,pdf,csv}")
+        print("  - fig_multi_bandwidth.{png,pdf,csv}")
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\n❌ Error during execution: {e}")
         import traceback
         traceback.print_exc()
 
