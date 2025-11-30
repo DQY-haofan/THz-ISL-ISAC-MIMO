@@ -50,7 +50,7 @@ pn_model:
   S_phi_c_K0: 0.000000000000001  # White phase noise floor
 
   # PLL loop bandwidth
-  B_loop_hz: 1000000.0      # 1 MHz loop bandwidth
+  B_loop_hz: 10000000.0      # 1 MHz loop bandwidth
 
   # Transfer function model
   H_err_model_type: FirstOrderHPF
