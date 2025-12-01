@@ -40,27 +40,72 @@ except ImportError as e:
     sys.exit(1)
 
 
+
 def setup_ieee_style():
-    """IEEE 双栏论文风格"""
+    """
+    Standardized Matplotlib configuration for IEEE Transactions.
+    Size: 3.5 inches (single column)
+    Font: Arial/Helvetica, 8pt
+    """
     plt.rcParams.update({
-        'figure.figsize': (3.5, 2.625),  # IEEE单栏宽度
+        # Figure settings
+        'figure.figsize': (3.5, 2.625),  # 3.5" width, 4:3 aspect ratio
         'figure.dpi': 300,
         'savefig.dpi': 300,
         'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.05,
+
+        # Font settings
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Arial', 'DejaVu Sans'],
-        'font.size': 8,
+        'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+        'font.size': 8,          # Main text size
+        'axes.titlesize': 8,     # Should ideally be empty (use caption)
         'axes.labelsize': 8,
-        'axes.titlesize': 9,
-        'xtick.labelsize': 7,
-        'ytick.labelsize': 7,
-        'legend.fontsize': 7,
-        'lines.linewidth': 1.5,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        'legend.fontsize': 7,    # Legend slightly smaller
+        'text.usetex': False,    # Better compatibility, use mathtext
+
+        # Line and marker settings
+        'lines.linewidth': 1.0,  # Thin, precise lines
         'lines.markersize': 4,
-        'axes.grid': True,
+        'lines.markeredgewidth': 0.5,
+
+        # Grid settings
         'grid.alpha': 0.3,
-        'grid.linestyle': '--',
+        'grid.linewidth': 0.5,
+        'axes.linewidth': 0.5,
+        'axes.grid': True,
+        'axes.axisbelow': True,  # Grid behind data
+
+        # Legend settings
+        'legend.frameon': True,
+        'legend.framealpha': 0.9,
+        'legend.fancybox': False, # Square corners preferred
+        'legend.edgecolor': 'black',
+        'legend.borderpad': 0.2,
+        'legend.labelspacing': 0.2, # Compact spacing
+
+        # Tick settings
+        'xtick.major.width': 0.5,
+        'ytick.major.width': 0.5,
+        'xtick.direction': 'in', # Ticks inside is often cleaner
+        'ytick.direction': 'in',
     })
+
+    # Standard Color Palette (IEEE/Matlab style)
+    colors = {
+        'blue':    '#0072BD',
+        'orange':  '#D95319',
+        'yellow':  '#EDB120',
+        'purple':  '#7E2F8E',
+        'green':   '#77AC30',
+        'cyan':    '#4DBEEE',
+        'red':     '#A2142F',
+        'black':   '#000000',
+        'gray':    '#7F7F7F',
+    }
+    return colors
 
 
 def create_clean_awgn_config(base_config: dict) -> dict:
@@ -478,7 +523,7 @@ def plot_ablation(df: pd.DataFrame, output_dir: Path, rmse_theory: float = None)
     ax.set_xlabel(r'ISAC Overhead $\alpha$')
     ax.set_ylabel('Range RMSE (mm, log scale)')
     ax.set_xlim([df['alpha'].min() * 0.95, df['alpha'].max() * 1.05])
-    ax.legend(loc='upper right', fontsize=6.5, framealpha=0.95)
+    ax.legend(loc='upper right', framealpha=0.95)
     ax.grid(True, alpha=0.3, which='both')
 
     plt.tight_layout()
@@ -609,7 +654,7 @@ def plot_relative_degradation(df: pd.DataFrame, output_dir: Path):
         else:
             ax.set_ylim([0.9, ratio_max * 1.1])
 
-    ax.legend(fontsize=6.5, framealpha=0.95, loc='best')
+    ax.legend(framealpha=0.95, loc='best')
     ax.grid(True, alpha=0.3, which='both')
 
     plt.tight_layout()

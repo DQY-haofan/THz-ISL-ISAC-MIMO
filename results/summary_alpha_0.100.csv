@@ -1,6 +1,6 @@
 Configuration,RMSE (mm),BCRLB_tau (s²),Method
 AWGN,1.234001e-04,6.777193e-31,unknown
 HW,2.445899e-04,2.662536e-30,unknown
-HW+PN,1.295022e-03,7.464024e-29,unknown
-HW+PN+DSE,2.056568e-03,1.882369e-28,unknown
-Full,2.056568e-03,1.882369e-28,unknown
+HW+PN,1.295021e-03,7.464013e-29,unknown
+HW+PN+DSE,1.415251e-03,8.914260e-29,unknown
+Full,1.415251e-03,8.914260e-29,unknown

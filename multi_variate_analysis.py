@@ -36,33 +36,72 @@ except ImportError as e:
     sys.exit(1)
 
 
+
 def setup_ieee_style():
-    """IEEE 期刊绘图风格 (Single Column)"""
+    """
+    Standardized Matplotlib configuration for IEEE Transactions.
+    Size: 3.5 inches (single column)
+    Font: Arial/Helvetica, 8pt
+    """
     plt.rcParams.update({
-        'figure.figsize': (3.5, 2.625),
+        # Figure settings
+        'figure.figsize': (3.5, 2.625),  # 3.5" width, 4:3 aspect ratio
         'figure.dpi': 300,
         'savefig.dpi': 300,
         'savefig.bbox': 'tight',
         'savefig.pad_inches': 0.05,
+
+        # Font settings
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size': 8,
+        'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+        'font.size': 8,          # Main text size
+        'axes.titlesize': 8,     # Should ideally be empty (use caption)
         'axes.labelsize': 8,
-        'axes.titlesize': 8,
-        'legend.fontsize': 7,
-        'lines.linewidth': 1.2,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        'legend.fontsize': 7,    # Legend slightly smaller
+        'text.usetex': False,    # Better compatibility, use mathtext
+
+        # Line and marker settings
+        'lines.linewidth': 1.0,  # Thin, precise lines
         'lines.markersize': 4,
-        'axes.grid': True,
+        'lines.markeredgewidth': 0.5,
+
+        # Grid settings
         'grid.alpha': 0.3,
         'grid.linewidth': 0.5,
-    })
-    # IEEE 标准色盘
-    return {
-        'blue': '#0072BD', 'orange': '#D95319', 'green': '#77AC30',
-        'purple': '#7E2F8E', 'red': '#A2142F', 'cyan': '#4DBEEE',
-        'black': '#000000', 'gray': '#7F7F7F'
-    }
+        'axes.linewidth': 0.5,
+        'axes.grid': True,
+        'axes.axisbelow': True,  # Grid behind data
 
+        # Legend settings
+        'legend.frameon': True,
+        'legend.framealpha': 0.9,
+        'legend.fancybox': False, # Square corners preferred
+        'legend.edgecolor': 'black',
+        'legend.borderpad': 0.2,
+        'legend.labelspacing': 0.2, # Compact spacing
+
+        # Tick settings
+        'xtick.major.width': 0.5,
+        'ytick.major.width': 0.5,
+        'xtick.direction': 'in', # Ticks inside is often cleaner
+        'ytick.direction': 'in',
+    })
+
+    # Standard Color Palette (IEEE/Matlab style)
+    colors = {
+        'blue':    '#0072BD',
+        'orange':  '#D95319',
+        'yellow':  '#EDB120',
+        'purple':  '#7E2F8E',
+        'green':   '#77AC30',
+        'cyan':    '#4DBEEE',
+        'red':     '#A2142F',
+        'black':   '#000000',
+        'gray':    '#7F7F7F',
+    }
+    return colors
 
 def run_pareto_for_config(config, label, tag_col_name, tag_value):
     """为特定配置计算完整的 Pareto 边界"""

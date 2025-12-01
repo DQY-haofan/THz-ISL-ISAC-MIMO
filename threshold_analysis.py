@@ -52,53 +52,70 @@ except ImportError as e:
 
 
 def setup_ieee_style():
-    """IEEE出版风格配置 - 匹配主可视化脚本"""
+    """
+    Standardized Matplotlib configuration for IEEE Transactions.
+    Size: 3.5 inches (single column)
+    Font: Arial/Helvetica, 8pt
+    """
     plt.rcParams.update({
         # Figure settings
-        'figure.figsize': (3.5, 2.625),  # IEEE single column width
+        'figure.figsize': (3.5, 2.625),  # 3.5" width, 4:3 aspect ratio
         'figure.dpi': 300,
         'savefig.dpi': 300,
         'savefig.bbox': 'tight',
         'savefig.pad_inches': 0.05,
 
-        # Font settings (matching visualize_results.py)
+        # Font settings
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size': 8,
-        'axes.titlesize': 8,
+        'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+        'font.size': 8,          # Main text size
+        'axes.titlesize': 8,     # Should ideally be empty (use caption)
         'axes.labelsize': 8,
         'xtick.labelsize': 8,
         'ytick.labelsize': 8,
-        'legend.fontsize': 8,
-        'text.usetex': False,
+        'legend.fontsize': 7,    # Legend slightly smaller
+        'text.usetex': False,    # Better compatibility, use mathtext
 
         # Line and marker settings
-        'lines.linewidth': 1.0,
+        'lines.linewidth': 1.0,  # Thin, precise lines
         'lines.markersize': 4,
         'lines.markeredgewidth': 0.5,
 
         # Grid settings
         'grid.alpha': 0.3,
         'grid.linewidth': 0.5,
-
-        # Axes settings
         'axes.linewidth': 0.5,
         'axes.grid': True,
-        'axes.axisbelow': True,
+        'axes.axisbelow': True,  # Grid behind data
 
         # Legend settings
         'legend.frameon': True,
         'legend.framealpha': 0.9,
-        'legend.borderpad': 0.3,
-        'legend.columnspacing': 1.0,
-        'legend.handlelength': 1.5,
+        'legend.fancybox': False, # Square corners preferred
+        'legend.edgecolor': 'black',
+        'legend.borderpad': 0.2,
+        'legend.labelspacing': 0.2, # Compact spacing
 
         # Tick settings
         'xtick.major.width': 0.5,
         'ytick.major.width': 0.5,
-        'xtick.minor.width': 0.3,
-        'ytick.minor.width': 0.3,
+        'xtick.direction': 'in', # Ticks inside is often cleaner
+        'ytick.direction': 'in',
     })
+
+    # Standard Color Palette (IEEE/Matlab style)
+    colors = {
+        'blue':    '#0072BD',
+        'orange':  '#D95319',
+        'yellow':  '#EDB120',
+        'purple':  '#7E2F8E',
+        'green':   '#77AC30',
+        'cyan':    '#4DBEEE',
+        'red':     '#A2142F',
+        'black':   '#000000',
+        'gray':    '#7F7F7F',
+    }
+    return colors
 
 
 def run_threshold_sweep(config_path: str, grid_size: int = 10, mode: str = 'fast'):
@@ -624,7 +641,8 @@ def visualize_threshold_results(data_source, output_dir='figures', working_point
     # ✅ 修复：色标明确标注为百分数
     cbar = plt.colorbar(im, ax=ax)
     cbar.ax.set_ylabel('Relative Error [%]', fontsize=8)
-    cbar.ax.tick_params(labelsize=7)
+    cbar.ax.tick_params(labelsize=7)  # 强制设为 7pt，与图例一致
+    cbar.outline.set_linewidth(0.5)  # 边框线宽统一
 
     # 网格和图例
     ax.grid(True, alpha=0.3, linewidth=0.5)

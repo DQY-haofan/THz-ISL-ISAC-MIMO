@@ -25,19 +25,70 @@ except ImportError as e:
 
 
 def setup_ieee_style():
+    """
+    Standardized Matplotlib configuration for IEEE Transactions.
+    Size: 3.5 inches (single column)
+    Font: Arial/Helvetica, 8pt
+    """
     plt.rcParams.update({
-        'figure.figsize': (3.5, 2.625),
+        # Figure settings
+        'figure.figsize': (3.5, 2.625),  # 3.5" width, 4:3 aspect ratio
         'figure.dpi': 300,
+        'savefig.dpi': 300,
+        'savefig.bbox': 'tight',
+        'savefig.pad_inches': 0.05,
+
+        # Font settings
         'font.family': 'sans-serif',
-        'font.sans-serif': ['Helvetica', 'Arial', 'DejaVu Sans'],
-        'font.size': 8,
+        'font.sans-serif': ['Arial', 'Helvetica', 'DejaVu Sans'],
+        'font.size': 8,          # Main text size
+        'axes.titlesize': 8,     # Should ideally be empty (use caption)
         'axes.labelsize': 8,
-        'axes.titlesize': 8,
-        'legend.fontsize': 7,
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        'legend.fontsize': 7,    # Legend slightly smaller
+        'text.usetex': False,    # Better compatibility, use mathtext
+
+        # Line and marker settings
+        'lines.linewidth': 1.0,  # Thin, precise lines
+        'lines.markersize': 4,
+        'lines.markeredgewidth': 0.5,
+
+        # Grid settings
         'grid.alpha': 0.3,
-        'lines.linewidth': 1.5,
+        'grid.linewidth': 0.5,
+        'axes.linewidth': 0.5,
+        'axes.grid': True,
+        'axes.axisbelow': True,  # Grid behind data
+
+        # Legend settings
+        'legend.frameon': True,
+        'legend.framealpha': 0.9,
+        'legend.fancybox': False, # Square corners preferred
+        'legend.edgecolor': 'black',
+        'legend.borderpad': 0.2,
+        'legend.labelspacing': 0.2, # Compact spacing
+
+        # Tick settings
+        'xtick.major.width': 0.5,
+        'ytick.major.width': 0.5,
+        'xtick.direction': 'in', # Ticks inside is often cleaner
+        'ytick.direction': 'in',
     })
 
+    # Standard Color Palette (IEEE/Matlab style)
+    colors = {
+        'blue':    '#0072BD',
+        'orange':  '#D95319',
+        'yellow':  '#EDB120',
+        'purple':  '#7E2F8E',
+        'green':   '#77AC30',
+        'cyan':    '#4DBEEE',
+        'red':     '#A2142F',
+        'black':   '#000000',
+        'gray':    '#7F7F7F',
+    }
+    return colors
 
 def perform_autotune(config):
     """
