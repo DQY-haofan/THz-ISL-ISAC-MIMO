@@ -215,7 +215,7 @@ def generate_mimo_combined_figure(results, colors, figures_dir):
     all_lines = lines1 + lines2
     all_labels = labels1 + labels2
 
-    ax1.legend(all_lines, all_labels, fontsize=6.5, loc='upper right',
+    ax1.legend(all_lines, all_labels, fontsize=6.5, loc='lower right',
                ncol=2, framealpha=0.9, columnspacing=0.8,
                handlelength=1.5, handletextpad=0.5)
 
